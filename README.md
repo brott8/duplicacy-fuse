@@ -2,6 +2,10 @@
 
 `duplicacy-fuse` is a read-only FUSE2 view of a selected Duplicacy snapshot revision. It also lists file or exact-directory history for scripting and future desktop integrations.
 
+## Lineage
+
+This private GitHub repository continues the original implementation at [GitLab](https://gitlab.com/andrewheberle/duplicacy-fuse). The original Git commit history is preserved.
+
 ## Requirements
 
 On Manjaro, install Go, GCC, pkgconf, and the FUSE2 development/runtime package:
