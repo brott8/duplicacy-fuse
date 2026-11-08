@@ -1,13 +1,13 @@
-.PHONY : all
+.PHONY : all windows linux build-linux
 
-all : duplicacy-fuse duplicacy-fuse.exe
+all : build-linux duplicacy-fuse.exe
 
 windows : duplicacy-fuse.exe
 
-linux : duplicacy-fuse
+linux : build-linux
 
-duplicacy-fuse : *.go
-	env GOOS=linux go build .
+build-linux :
+	env CGO_ENABLED=1 GOOS=linux go build -o duplicacy-fuse .
 
 duplicacy-fuse.exe : *.go
 	env GOOS=windows go build .

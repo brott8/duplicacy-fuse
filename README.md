@@ -1,92 +1,100 @@
 # duplicacy-fuse
 
-## Overview
-
-This is my first effort at implementing a file system in userspace.
-
-## Purpose
-
-Allows snapshots and revisions on storage in a configured [duplicacy](https://github.com/gilbertchen/duplicacy/) repository to be mounted (read-only) as a file system.
-
-## Building
-
-Should build and run on both Windows and Linux.
-
-On Windows, it can be built with, or without CGO support using the CGO_ENABLED env var.
+`duplicacy-fuse` is a read-only FUSE2 view of a selected Duplicacy snapshot revision. It also lists file or exact-directory history for scripting and future desktop integrations.
 
 ## Requirements
 
-Check out [cgofuse](https://github.com/billziss-gh/cgofuse) for full requirements, however basics are:
-
-* Linux : gcc, libfuse-dev
-* Windows (cgo) : [WinFsp](https://github.com/billziss-gh/winfsp), gcc
-* Windows (!cgo)  : [WinFsp](https://github.com/billziss-gh/winfsp)
-
-## CLI
-
-### Building
+On Manjaro, install Go, GCC, pkgconf, and the FUSE2 development/runtime package:
 
 ```sh
-go get -u gitlab.com/andrewheberle/duplicacy-fuse
+sudo pacman -S go gcc pkgconf fuse2
 ```
 
-Optional: To build the !cgo version on Windows, set the "CGO_ENABLED" environment variable to "0" before building.
+Install the Duplicacy CLI separately and ensure `duplicacy` is on `PATH`. User mounts require access to `/dev/fuse` and the `fusermount` helper provided by FUSE2.
 
-### Usage
+Build the Linux FUSE2 binary from the repository:
 
 ```sh
-duplicacy-fuse <mount point> [options]
+make build-linux
 ```
 
-### Options
+The build uses cgofuse v1.6.0's default FUSE2 API. FUSE3 can be selected manually with `-tags=fuse3` on systems whose FUSE3 library has the `libfuse3.so.3` soname; the current Manjaro package uses `libfuse3.so.4` and is not detected by this cgofuse version.
 
-  `-o repositorty=<path>` : Path to repository. Defaults to current directory.
-  
-  `-o storage=<storage name>` : Remote storage to mount. Defaults to "default".
+## History
 
-  `-o password=<storage password>`: Password for the specified storage.
-  
-  `-o snapshot=<id>` : Which snapshot id to mount. Unless `all` option is specified, defaults to the repository snapshot id for the chosen storage.
-  
-  `-o revision=<number>` : Which revision to mount. Cannot be specified when the `all` is specified. **Currently not working**
+The repository path is explicit. If exactly one storage is configured it is selected automatically; otherwise pass `--storage` to avoid choosing the wrong remote. The configured snapshot ID is used unless `--snapshot` is provided.
 
-  `-o cachedir=<dir>` : Where to do caching via the KV store (currently uses [bitcask](https://github.com/prologic/bitcask)) for revision contents. Defaults to `$HOME/.duplicacy-fuse` on Linux and `%USERPROFILE%\.duplicacy-fuse` on Windows.
+File history uses Duplicacy's `history` command:
 
-  `-o cleancache` : Deletes cache contents on start.
-  
-  `-o all` : Display all snapshot ids for the specified storage.
-
-## Library
-
-```go
-import (
-  "github.com/billziss-gh/cgofuse/fuse"
-  "gitlab.com/andrewheberle/duplicacy-fuse/dpfs"
-)
-
-func main() {
-  duplicacyfs := dpfs.NewDuplicacyfs()
-  host := fuse.NewFileSystemHost(duplicacyfs)
-  mountpoint := "/a/path"
-  options := []string{"-o", "repository=/path/to/repo"}
-  host.Mount(mountpoint, options)
-}
+```sh
+./duplicacy-fuse history --repo /path/to/repo --storage nas --path 'src/main.go'
+./duplicacy-fuse history --repo /path/to/repo --storage nas --path 'src/main.go' --json
 ```
-  
-## Status
 
-Basic functionality seems to all work fine, although this has only been tested on Windows.
+Directory history discovers revisions with `duplicacy list`, then reads revision manifests and reports only revisions where that exact directory exists. It does not download file contents:
 
-I've had a few unusual crashes when browsing the filesystem which I believe is due to concurrency issues.
+```sh
+./duplicacy-fuse history --repo /path/to/repo --storage nas --path 'src' --directory --json
+```
 
-Performance is quite slow when opening files.
+Discover snapshot revisions and creation times with the CLI-backed `revisions` command:
 
-## TODO
+```sh
+./duplicacy-fuse revisions --repo /path/to/repo --storage nas --json
+```
 
-* Make SFTP storage using key based authentication work
-* Tests - Implement tests for the various fuse methods (current ones for Getattr always fail)
-* KV store is an Interface so potentially a better/faster option could be implemented.
-* Cache snapshot ID and revisions for speedy top level browsing.
-* Implement stubs for all fuse operations with logging to see whats missing 
-* Make better :)
-* Upstream?
+JSON output is suitable for shell tools or a later Nautilus context-menu caller. File history records include revision, size, timestamp, hash when present, path, and the original CLI row. Directory records include revision, snapshot timestamp, path, and presence.
+
+## Mount
+
+Pass a positive revision and a repository-relative selected path. If `--path` names a file, the FUSE root contains only that file; if it names a directory, the mounted root is that directory and contains only its subtree. Omitting `--path` exposes the repository root. All mounts are read-only and run in the foreground.
+
+```sh
+./duplicacy-fuse mount \
+  --repo /path/to/repo \
+  --storage nas \
+  --snapshot repo-id \
+  --revision 42 \
+  --path 'src' \
+  --mountpoint /mnt/duplicacy-history \
+  --cache-size 10GiB
+```
+
+Use `duplicacy-fuse revisions` or file history to discover revisions. These commands invoke an external Duplicacy CLI; use an SMB-capable CLI and pass `--duplicacy-bin` when it is not on `PATH`. Mounting uses the Duplicacy Go library directly. When multiple storages are configured, `--storage` is required. `--password` is the Duplicacy storage-encryption password, not the SMB login password. Direct `smb://` storage is supported; its password is read from Duplicacy's saved `smb_password` preference/keyring or `DUPLICACY_<STORAGE_NAME>_SMB_PASSWORD` (for example, `DUPLICACY_UNRAID_SMB_PASSWORD`). SMB reads retry once after recognized transport or expired-session errors when no partial chunk has been received; if reconnecting fails, remount to start a fresh session. Avoid putting either password in process arguments.
+
+Unmount from another terminal:
+
+```sh
+fusermount -u /mnt/duplicacy-history
+```
+
+The mount process exits after unmount. The source repository is never used as a destination for restored file data.
+
+FUSE chunk reads support Duplicacy's password-based storage encryption. RSA-encrypted file chunks are not supported because this application does not load an RSA private key and currently fail with a read error.
+
+## Chunk Cache
+
+Requested chunks are fetched on demand and stored as plaintext outside the repository, by default under `${XDG_CACHE_HOME:-$HOME/.cache}/duplicacy-fuse/chunks`. Cache files are created with owner-only permissions; protect custom cache locations accordingly. `--cache-dir` selects another location and must resolve outside the repository. `--cache-size` sets the maximum retained payload size; LRU eviction removes old chunks. A zero size disables persistent caching. Concurrent requests for the same chunk share one download. Reads use independent in-memory copies, so an evicted disk entry cannot invalidate an active read.
+
+Clear the default chunk cache with:
+
+```sh
+./duplicacy-fuse clear-cache
+```
+
+For a custom cache location, pass the same directory with `--cache-dir`. The command only clears directories marked as a `duplicacy-fuse` cache.
+
+Revision manifests and chunk indexes are metadata and are loaded once per mount. File data is not prefetched or staged; each read fetches only chunks intersecting its requested byte range. Selected historical views do not support writes, restores, rename inference, or full-repository browsing across revisions.
+
+## Testing
+
+The repository contains separate Go modules. Run tests in both:
+
+```sh
+go test ./...
+(cd dpfs && go test ./...)
+go test -race ./...
+(cd dpfs && go test -race ./...)
+```
+
+Build and mount integration tests require a Go 1.17+ toolchain, FUSE2 development headers, a usable Duplicacy repository, and a user-level FUSE mount environment.

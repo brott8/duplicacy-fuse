@@ -3,8 +3,8 @@ package dpfs
 import (
 	"sync"
 
-	"github.com/billziss-gh/cgofuse/fuse"
 	duplicacy "github.com/gilbertchen/duplicacy/src"
+	"github.com/winfsp/cgofuse/fuse"
 )
 
 // Dpfs is the Duplicacy filesystem type. This type satisfies the fuse.FileSystemInterface interace
@@ -12,27 +12,15 @@ type Dpfs struct {
 	fuse.FileSystemBase
 	config     *duplicacy.Config
 	storage    duplicacy.Storage
-	root       string
-	snapshotid string
-	revision   int
-	password   string
 	preference *duplicacy.Preference
 	repository string
 	mu         sync.Mutex
-	cache      DpfsKvStore
+	entries    map[string]*duplicacy.Entry
+	children   map[string][]string
+	folderRoot string
+	fileRoot   string
+	snapshot   *duplicacy.Snapshot
+	cache      *chunkCache
 }
 
-// Nicer names for fuse errors/return codes
-const (
-	NotImplemented        = -fuse.ENOSYS
-	NoSuchFileOrDirectory = -fuse.ENOENT
-	IOError               = -fuse.EIO
-	IsDirectory           = -fuse.EISDIR
-	NotDirectory          = -fuse.ENOTDIR
-)
-
-// NewDuplicacyfs creates an initial Dpfs struct
-func NewDuplicacyfs() *Dpfs {
-	self := Dpfs{}
-	return &self
-}
+var _ fuse.FileSystemInterface = (*Dpfs)(nil)
