@@ -37,6 +37,7 @@ type cliOptions struct {
 	json       bool
 	directory  bool
 	debug      bool
+	background bool
 }
 
 type fileVersion struct {
@@ -109,6 +110,7 @@ func runMount(args []string, stderr io.Writer) error {
 	fs.StringVar(&options.mountpoint, "mountpoint", "", "FUSE mountpoint (required)")
 	fs.StringVar(&options.cacheDir, "cache-dir", "", "persistent chunk cache directory")
 	fs.BoolVar(&options.debug, "debug", false, "log mount timings, directory scans, chunk reads, and cache activity")
+	fs.BoolVar(&options.background, "background", false, "return after the FUSE mount is ready")
 	cacheSize := fs.String("cache-size", "10GiB", "maximum persistent chunk cache size")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -124,7 +126,7 @@ func runMount(args []string, stderr io.Writer) error {
 		return fmt.Errorf("invalid --cache-size: %w", err)
 	}
 	options.cacheBytes = parsedCacheSize
-	if options.debug {
+	if options.debug || options.background {
 		duplicacy.SetLoggingLevel(duplicacy.WARN)
 		defer duplicacy.SetLoggingLevel(duplicacy.INFO)
 	}
@@ -133,6 +135,13 @@ func runMount(args []string, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
+	}
+	if options.background && os.Getenv(backgroundChildEnvironment) != "1" {
+		return startBackgroundMount(args, options.mountpoint, stderr)
+	}
+	onInit, err := backgroundReadyNotifier()
+	if err != nil {
+		return err
 	}
 	view, err := dpfs.NewView(dpfs.MountOptions{
 		SelectionOptions: dpfs.SelectionOptions{
@@ -147,6 +156,7 @@ func runMount(args []string, stderr io.Writer) error {
 		CacheBytes:   options.cacheBytes,
 		Debug:        options.debug,
 		DebugWriter:  stderr,
+		OnInit:       onInit,
 	})
 	if err != nil {
 		return err

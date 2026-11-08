@@ -21,6 +21,7 @@ type MountOptions struct {
 	CacheBytes   int64
 	Debug        bool
 	DebugWriter  io.Writer
+	OnInit       func()
 }
 
 type readRange struct {
@@ -107,6 +108,7 @@ func NewView(options MountOptions) (*Dpfs, error) {
 		legacyMetadata: legacyMetadata,
 		debug:          options.Debug,
 		debugWriter:    options.DebugWriter,
+		onInit:         options.OnInit,
 		cache:          cache,
 	}
 	if lazyMetadata {
@@ -285,6 +287,9 @@ func (view *Dpfs) fusePath(name string) (string, bool) {
 
 func (view *Dpfs) Init() {
 	debugLog(view.debugWriter, view.debug, "DPFS_FUSE", "filesystem initialized")
+	if view.onInit != nil {
+		view.onInit()
+	}
 }
 
 func (view *Dpfs) Destroy() {

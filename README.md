@@ -51,7 +51,7 @@ JSON output is suitable for shell tools or a later Nautilus context-menu caller.
 
 ## Mount
 
-Pass a positive revision and a repository-relative selected path. If `--path` names a file, the FUSE root contains only that file; if it names a directory, the mounted root is that directory and contains only its subtree. Omitting `--path` exposes the repository root. All mounts are read-only and run in the foreground.
+Pass a positive revision and a repository-relative selected path. If `--path` names a file, the FUSE root contains only that file; if it names a directory, the mounted root is that directory and contains only its subtree. Omitting `--path` exposes the repository root. All mounts are read-only and run in the foreground by default. On Linux, `--background` starts a detached mount and returns after FUSE initialization; it prints the path to a private log file.
 
 For current-format snapshots mounted at the repository root, directory entries are streamed and cached when a directory is first listed, rather than building the full file tree at mount startup. Explicit `--path` views still load metadata up front. Legacy JSON-format snapshots must be sorted by Duplicacy before listing, so their first directory browse still loads all metadata. The snapshot format has no random-access index, so first access to a deep directory may scan preceding metadata entries.
 
@@ -66,7 +66,7 @@ For current-format snapshots mounted at the repository root, directory entries a
   --cache-size 10GiB
 ```
 
-Use `--debug` on `mount` to log setup timings, entries scanned per directory, and chunk read/cache timing. Duplicacy INFO/TRACE logs are suppressed in debug mode to avoid exposing key material; warnings and errors remain visible. Debug output may contain repository paths and directory names, so review it before sharing.
+Use `--debug` on `mount` to log setup timings, entries scanned per directory, and chunk read/cache timing. Duplicacy INFO/TRACE logs are suppressed in debug/background mode to avoid exposing key material; warnings and errors remain visible. Debug output may contain repository paths and directory names, so review it before sharing.
 
 Use `duplicacy-fuse revisions` or file history to discover revisions. These commands invoke an external Duplicacy CLI; use an SMB-capable CLI and pass `--duplicacy-bin` when it is not on `PATH`. Mounting uses the Duplicacy Go library directly. When multiple storages are configured, `--storage` is required. `--password` is the Duplicacy storage-encryption password, not the SMB login password. Direct `smb://` storage is supported; its password is read from Duplicacy's saved `smb_password` preference/keyring or `DUPLICACY_<STORAGE_NAME>_SMB_PASSWORD` (for example, `DUPLICACY_UNRAID_SMB_PASSWORD`). SMB reads retry once after recognized transport or expired-session errors when no partial chunk has been received; if reconnecting fails, remount to start a fresh session. Avoid putting either password in process arguments.
 

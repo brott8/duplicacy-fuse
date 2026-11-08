@@ -25,6 +25,7 @@ type Dpfs struct {
 	metadataComplete    bool
 	debug               bool
 	debugWriter         io.Writer
+	onInit              func()
 	listSnapshotEntries func(func(*duplicacy.Entry) bool)
 	folderRoot          string
 	fileRoot            string
