@@ -5,6 +5,7 @@ replace gitlab.com/andrewheberle/duplicacy-fuse/dpfs => ./dpfs
 go 1.17
 
 require (
+	github.com/gilbertchen/duplicacy v1.2.6-0.20230706025124-3a81c1065add
 	github.com/winfsp/cgofuse v1.6.0
 	gitlab.com/andrewheberle/duplicacy-fuse/dpfs v0.0.0-00010101000000-000000000000
 )
@@ -21,7 +22,6 @@ require (
 	github.com/dgrijalva/jwt-go v3.2.0+incompatible // indirect
 	github.com/geoffgarside/ber v1.1.0 // indirect
 	github.com/gilbertchen/azure-sdk-for-go v14.1.2-0.20180323033227-8fd4663cab7c+incompatible // indirect
-	github.com/gilbertchen/duplicacy v1.2.6-0.20230706025124-3a81c1065add // indirect
 	github.com/gilbertchen/go-dropbox v0.0.0-20230321030224-087ef8db1916 // indirect
 	github.com/gilbertchen/go-ole v1.2.0 // indirect
 	github.com/gilbertchen/goamz v0.0.0-20170712012135-eada9f4e8cc2 // indirect

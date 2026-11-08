@@ -2,6 +2,7 @@ package dpfs
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"sort"
@@ -18,6 +19,8 @@ type MountOptions struct {
 	SelectedPath string
 	CacheDir     string
 	CacheBytes   int64
+	Debug        bool
+	DebugWriter  io.Writer
 }
 
 type readRange struct {
@@ -29,9 +32,12 @@ type readRange struct {
 
 // NewView downloads only the selected revision's manifest and chunk index.
 func NewView(options MountOptions) (*Dpfs, error) {
+	mountStart := time.Now()
+	debugLog(options.DebugWriter, options.Debug, "DPFS_MOUNT", "starting revision %d", options.Revision)
 	if options.Revision < 1 {
 		return nil, fmt.Errorf("revision must be a positive integer")
 	}
+	phaseStart := time.Now()
 	selected, err := normalizeSelectedPath(options.SelectedPath)
 	if err != nil {
 		return nil, err
@@ -40,26 +46,34 @@ func NewView(options MountOptions) (*Dpfs, error) {
 	if err != nil {
 		return nil, err
 	}
+	debugLog(options.DebugWriter, options.Debug, "DPFS_MOUNT", "resolved repository preferences in %s", time.Since(phaseStart))
 	cacheDir, err := cachePathOutsideRepository(selection.Repository, options.CacheDir)
 	if err != nil {
 		return nil, err
 	}
+	phaseStart = time.Now()
 	manager, config, storage, metadataCacheDir, err := openBackupManager(selection)
 	if err != nil {
 		return nil, err
 	}
 	defer os.RemoveAll(metadataCacheDir)
+	debugLog(options.DebugWriter, options.Debug, "DPFS_MOUNT", "opened backup storage and config in %s", time.Since(phaseStart))
+	phaseStart = time.Now()
 	snapshot := manager.SnapshotManager.DownloadSnapshot(selection.SnapshotID, options.Revision)
 	if snapshot == nil {
 		return nil, fmt.Errorf("revision %d was not found", options.Revision)
 	}
+	debugLog(options.DebugWriter, options.Debug, "DPFS_MOUNT", "loaded snapshot manifest in %s", time.Since(phaseStart))
+	phaseStart = time.Now()
 	if !manager.SnapshotManager.DownloadSnapshotSequence(snapshot, "chunks") ||
 		!manager.SnapshotManager.DownloadSnapshotSequence(snapshot, "lengths") {
 		return nil, fmt.Errorf("failed to load metadata for revision %d", options.Revision)
 	}
+	debugLog(options.DebugWriter, options.Debug, "DPFS_MOUNT", "loaded %d chunk hashes and lengths in %s", len(snapshot.ChunkHashes), time.Since(phaseStart))
 	var entries []*duplicacy.Entry
 	lazyMetadata := selected == ""
 	legacyMetadata := false
+	phaseStart = time.Now()
 	if lazyMetadata {
 		legacyMetadata, err = snapshotUsesLegacyFileSequence(config, storage, snapshot)
 	} else {
@@ -68,11 +82,18 @@ func NewView(options MountOptions) (*Dpfs, error) {
 	if err != nil {
 		return nil, err
 	}
+	if lazyMetadata {
+		debugLog(options.DebugWriter, options.Debug, "DPFS_MOUNT", "file metadata format legacy=%t; detection took %s", legacyMetadata, time.Since(phaseStart))
+	} else {
+		debugLog(options.DebugWriter, options.Debug, "DPFS_MOUNT", "loaded %d file metadata entries in %s", len(entries), time.Since(phaseStart))
+	}
 
+	phaseStart = time.Now()
 	cache, err := newChunkCache(cacheDir, options.CacheBytes)
 	if err != nil {
 		return nil, err
 	}
+	debugLog(options.DebugWriter, options.Debug, "DPFS_MOUNT", "initialized chunk cache in %s", time.Since(phaseStart))
 	view := &Dpfs{
 		storage:        storage,
 		config:         config,
@@ -84,9 +105,12 @@ func NewView(options MountOptions) (*Dpfs, error) {
 		loadedDirs:     make(map[string]bool),
 		lazyMetadata:   lazyMetadata,
 		legacyMetadata: legacyMetadata,
+		debug:          options.Debug,
+		debugWriter:    options.DebugWriter,
 		cache:          cache,
 	}
 	if lazyMetadata {
+		debugLog(options.DebugWriter, options.Debug, "DPFS_MOUNT", "view ready in %s", time.Since(mountStart))
 		return view, nil
 	}
 	entry := findSnapshotEntry(entries, selected)
@@ -128,6 +152,7 @@ func NewView(options MountOptions) (*Dpfs, error) {
 			sort.Strings(view.children[parent])
 		}
 	}
+	debugLog(options.DebugWriter, options.Debug, "DPFS_MOUNT", "loaded %d entries and built selected view in %s", len(view.entries), time.Since(phaseStart))
 	return view, nil
 }
 
@@ -259,9 +284,11 @@ func (view *Dpfs) fusePath(name string) (string, bool) {
 }
 
 func (view *Dpfs) Init() {
+	debugLog(view.debugWriter, view.debug, "DPFS_FUSE", "filesystem initialized")
 }
 
 func (view *Dpfs) Destroy() {
+	debugLog(view.debugWriter, view.debug, "DPFS_FUSE", "filesystem destroyed")
 }
 
 func (view *Dpfs) Statfs(name string, stat *fuse.Statfs_t) int {
@@ -419,14 +446,28 @@ func (view *Dpfs) Read(name string, buff []byte, offset int64, fh uint64) int {
 	if err != nil {
 		return -fuse.EIO
 	}
+	readStarted := time.Now()
 	for _, read := range ranges {
 		chunkHash := view.snapshot.ChunkHashes[read.index]
 		key := view.repository + "\x00" + view.preference.StorageURL + "\x00" + chunkHash
+		cacheMiss := false
+		chunkStarted := time.Now()
 		data, err := view.cache.Get(key, func() ([]byte, error) {
+			cacheMiss = true
+			fetchStarted := time.Now()
 			view.mu.Lock()
 			defer view.mu.Unlock()
-			return fetchChunk(view.config, view.storage, chunkHash)
+			data, err := fetchChunk(view.config, view.storage, chunkHash)
+			debugLog(view.debugWriter, view.debug, "DPFS_CHUNK", "downloaded chunk index=%d bytes=%d elapsed=%s error=%t",
+				read.index, len(data), time.Since(fetchStarted), err != nil)
+			return data, err
 		})
+		source := "cache"
+		if cacheMiss {
+			source = "storage"
+		}
+		debugLog(view.debugWriter, view.debug, "DPFS_READ_CHUNK", "path=%q chunk=%d source=%s bytes=%d elapsed=%s error=%t",
+			name, read.index, source, len(data), time.Since(chunkStarted), err != nil)
 		if err != nil || len(data) != view.snapshot.ChunkLengths[read.index] {
 			if read.bufferOffset > 0 {
 				return read.bufferOffset
@@ -436,6 +477,8 @@ func (view *Dpfs) Read(name string, buff []byte, offset int64, fh uint64) int {
 		length := read.chunkEnd - read.chunkStart
 		copy(buff[read.bufferOffset:read.bufferOffset+length], data[read.chunkStart:read.chunkEnd])
 	}
+	debugLog(view.debugWriter, view.debug, "DPFS_READ", "path=%q offset=%d bytes=%d chunks=%d elapsed=%s",
+		name, offset, len(buff), len(ranges), time.Since(readStarted))
 	return len(buff)
 }
 

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	duplicacy "github.com/gilbertchen/duplicacy/src"
 	"github.com/winfsp/cgofuse/fuse"
 	"gitlab.com/andrewheberle/duplicacy-fuse/dpfs"
 )
@@ -35,6 +36,7 @@ type cliOptions struct {
 	duplicacy  string
 	json       bool
 	directory  bool
+	debug      bool
 }
 
 type fileVersion struct {
@@ -106,6 +108,7 @@ func runMount(args []string, stderr io.Writer) error {
 	fs.IntVar(&options.revision, "revision", -1, "snapshot revision (required)")
 	fs.StringVar(&options.mountpoint, "mountpoint", "", "FUSE mountpoint (required)")
 	fs.StringVar(&options.cacheDir, "cache-dir", "", "persistent chunk cache directory")
+	fs.BoolVar(&options.debug, "debug", false, "log mount timings, directory scans, chunk reads, and cache activity")
 	cacheSize := fs.String("cache-size", "10GiB", "maximum persistent chunk cache size")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -121,6 +124,10 @@ func runMount(args []string, stderr io.Writer) error {
 		return fmt.Errorf("invalid --cache-size: %w", err)
 	}
 	options.cacheBytes = parsedCacheSize
+	if options.debug {
+		duplicacy.SetLoggingLevel(duplicacy.WARN)
+		defer duplicacy.SetLoggingLevel(duplicacy.INFO)
+	}
 	if options.cacheDir == "" {
 		options.cacheDir, err = defaultCacheDir()
 		if err != nil {
@@ -138,6 +145,8 @@ func runMount(args []string, stderr io.Writer) error {
 		SelectedPath: options.path,
 		CacheDir:     options.cacheDir,
 		CacheBytes:   options.cacheBytes,
+		Debug:        options.debug,
+		DebugWriter:  stderr,
 	})
 	if err != nil {
 		return err

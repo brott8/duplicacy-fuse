@@ -1,6 +1,7 @@
 package dpfs
 
 import (
+	"io"
 	"sync"
 
 	duplicacy "github.com/gilbertchen/duplicacy/src"
@@ -22,6 +23,8 @@ type Dpfs struct {
 	lazyMetadata        bool
 	legacyMetadata      bool
 	metadataComplete    bool
+	debug               bool
+	debugWriter         io.Writer
 	listSnapshotEntries func(func(*duplicacy.Entry) bool)
 	folderRoot          string
 	fileRoot            string

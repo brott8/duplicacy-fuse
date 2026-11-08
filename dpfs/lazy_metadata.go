@@ -4,6 +4,7 @@ import (
 	"path"
 	"sort"
 	"strings"
+	"time"
 
 	duplicacy "github.com/gilbertchen/duplicacy/src"
 )
@@ -34,10 +35,14 @@ func (view *Dpfs) ensureDirectoryLoadedLocked(directory string) error {
 			return nil
 		}
 	}
+	started := time.Now()
+	entriesBefore := len(view.entries)
 
 	if view.legacyMetadata {
 		// Legacy JSON snapshots are sorted by Duplicacy only after the full list is decoded.
+		scanned := 0
 		view.listRemoteEntries(func(entry *duplicacy.Entry) bool {
+			scanned++
 			view.addEntry(entry)
 			return true
 		})
@@ -54,13 +59,18 @@ func (view *Dpfs) ensureDirectoryLoadedLocked(directory string) error {
 		for parent := range view.children {
 			sort.Strings(view.children[parent])
 		}
+		debugLog(view.debugWriter, view.debug, "DPFS_DIRECTORY", "directory=%q legacy=true scanned=%d new_entries=%d duration=%s",
+			directory, scanned, len(view.entries)-entriesBefore, time.Since(started))
 		return nil
 	}
 
 	// Current snapshots are emitted directory-by-directory, so stop as soon as
 	// the first descendant shows that this directory's direct children are complete.
 	seenDirectory := directory == "."
+	scanned := 0
+	earlyStop := false
 	view.listRemoteEntries(func(entry *duplicacy.Entry) bool {
+		scanned++
 		name := strings.TrimSuffix(entry.Path, "/")
 		if name == "" {
 			return true
@@ -68,6 +78,7 @@ func (view *Dpfs) ensureDirectoryLoadedLocked(directory string) error {
 
 		if directory == "." {
 			if strings.Contains(name, "/") {
+				earlyStop = true
 				return false
 			}
 			view.addEntry(entry)
@@ -76,7 +87,11 @@ func (view *Dpfs) ensureDirectoryLoadedLocked(directory string) error {
 
 		insideDirectory := name == directory || strings.HasPrefix(name, directory+"/")
 		if !insideDirectory {
-			return !seenDirectory
+			if seenDirectory {
+				earlyStop = true
+				return false
+			}
+			return true
 		}
 		if name == directory {
 			view.addEntry(entry)
@@ -85,6 +100,7 @@ func (view *Dpfs) ensureDirectoryLoadedLocked(directory string) error {
 		seenDirectory = true
 		relative := strings.TrimPrefix(name, directory+"/")
 		if strings.Contains(relative, "/") {
+			earlyStop = true
 			return false
 		}
 		view.addEntry(entry)
@@ -93,6 +109,8 @@ func (view *Dpfs) ensureDirectoryLoadedLocked(directory string) error {
 
 	view.loadedDirs[directory] = true
 	sort.Strings(view.children[directory])
+	debugLog(view.debugWriter, view.debug, "DPFS_DIRECTORY", "directory=%q scanned=%d new_entries=%d early_stop=%t duration=%s",
+		directory, scanned, len(view.entries)-entriesBefore, earlyStop, time.Since(started))
 	return nil
 }
 
