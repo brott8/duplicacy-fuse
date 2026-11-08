@@ -201,3 +201,28 @@ func loadSnapshotEntries(config *duplicacy.Config, storage duplicacy.Storage, sn
 	}
 	return entries, nil
 }
+
+func snapshotUsesLegacyFileSequence(config *duplicacy.Config, storage duplicacy.Storage, snapshot *duplicacy.Snapshot) (bool, error) {
+	if len(snapshot.FileSequence) == 0 {
+		return false, fmt.Errorf("snapshot file sequence is empty")
+	}
+	if snapshot.Version == 0 {
+		return true, nil
+	}
+	operator := duplicacy.CreateChunkOperator(config, storage, nil, false, false, 1, false)
+	chunk := operator.Download(snapshot.FileSequence[0], 0, true)
+	if chunk == nil {
+		operator.Stop()
+		return false, fmt.Errorf("failed to read the first snapshot metadata chunk")
+	}
+	data := chunk.GetBytes()
+	if len(data) == 0 {
+		config.PutChunk(chunk)
+		operator.Stop()
+		return false, fmt.Errorf("the first snapshot metadata chunk is empty")
+	}
+	legacy := data[0] == '['
+	config.PutChunk(chunk)
+	operator.Stop()
+	return legacy, nil
+}

@@ -57,7 +57,14 @@ func NewView(options MountOptions) (*Dpfs, error) {
 		!manager.SnapshotManager.DownloadSnapshotSequence(snapshot, "lengths") {
 		return nil, fmt.Errorf("failed to load metadata for revision %d", options.Revision)
 	}
-	entries, err := loadSnapshotEntries(config, storage, snapshot)
+	var entries []*duplicacy.Entry
+	lazyMetadata := selected == ""
+	legacyMetadata := false
+	if lazyMetadata {
+		legacyMetadata, err = snapshotUsesLegacyFileSequence(config, storage, snapshot)
+	} else {
+		entries, err = loadSnapshotEntries(config, storage, snapshot)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -67,14 +74,20 @@ func NewView(options MountOptions) (*Dpfs, error) {
 		return nil, err
 	}
 	view := &Dpfs{
-		storage:    storage,
-		config:     config,
-		preference: selection.Preference,
-		repository: selection.Repository,
-		snapshot:   snapshot,
-		entries:    make(map[string]*duplicacy.Entry),
-		children:   make(map[string][]string),
-		cache:      cache,
+		storage:        storage,
+		config:         config,
+		preference:     selection.Preference,
+		repository:     selection.Repository,
+		snapshot:       snapshot,
+		entries:        make(map[string]*duplicacy.Entry),
+		children:       make(map[string][]string),
+		loadedDirs:     make(map[string]bool),
+		lazyMetadata:   lazyMetadata,
+		legacyMetadata: legacyMetadata,
+		cache:          cache,
+	}
+	if lazyMetadata {
+		return view, nil
 	}
 	entry := findSnapshotEntry(entries, selected)
 	isDir := selected == "" || (entry != nil && entry.IsDir())
@@ -199,6 +212,12 @@ func planReadRanges(snapshot *duplicacy.Snapshot, entry *duplicacy.Entry, offset
 }
 
 func (view *Dpfs) lookup(name string) (*duplicacy.Entry, bool) {
+	view.metadataMu.RLock()
+	defer view.metadataMu.RUnlock()
+	return view.lookupLocked(name)
+}
+
+func (view *Dpfs) lookupLocked(name string) (*duplicacy.Entry, bool) {
 	if name == "." || name == "" {
 		return nil, true
 	}
@@ -273,6 +292,9 @@ func (view *Dpfs) Getattr(name string, stat *fuse.Stat_t, fh uint64) int {
 		stat.Mtim = fuse.NewTimespec(time.Unix(0, 0))
 		return 0
 	}
+	if err := view.ensureDirectoryLoaded(path.Dir(relative)); err != nil {
+		return -fuse.EIO
+	}
 	entry, found := view.lookup(relative)
 	if !found || entry == nil {
 		return -fuse.ENOENT
@@ -308,13 +330,19 @@ func (view *Dpfs) Readdir(name string, fill func(name string, stat *fuse.Stat_t,
 	if !valid {
 		return -fuse.ENOENT
 	}
+	if err := view.ensureDirectoryLoaded(relative); err != nil {
+		return -fuse.EIO
+	}
+	view.metadataMu.RLock()
 	if relative != "." {
-		entry, found := view.lookup(relative)
+		entry, found := view.lookupLocked(relative)
 		if !found || entry == nil || !entry.IsDir() {
+			view.metadataMu.RUnlock()
 			return -fuse.ENOTDIR
 		}
 	}
 	entries := append([]string{".", ".."}, view.children[relative]...)
+	view.metadataMu.RUnlock()
 	if ofst < 0 {
 		return -fuse.EINVAL
 	}
@@ -336,6 +364,9 @@ func (view *Dpfs) Open(name string, flags int) (int, uint64) {
 	}
 	if relative == "." {
 		return -fuse.EISDIR, 0
+	}
+	if err := view.ensureDirectoryLoaded(path.Dir(relative)); err != nil {
+		return -fuse.EIO, 0
 	}
 	entry, found := view.lookup(relative)
 	if !found || entry == nil {
@@ -360,6 +391,9 @@ func (view *Dpfs) Read(name string, buff []byte, offset int64, fh uint64) int {
 	relative, valid := view.fusePath(name)
 	if !valid {
 		return -fuse.ENOENT
+	}
+	if err := view.ensureDirectoryLoaded(path.Dir(relative)); err != nil {
+		return -fuse.EIO
 	}
 	entry, found := view.lookup(relative)
 	if !found || entry == nil {
@@ -410,6 +444,9 @@ func (view *Dpfs) Readlink(name string) (int, string) {
 	if !valid {
 		return -fuse.ENOENT, ""
 	}
+	if err := view.ensureDirectoryLoaded(path.Dir(relative)); err != nil {
+		return -fuse.EIO, ""
+	}
 	entry, found := view.lookup(relative)
 	if !found || entry == nil || !entry.IsLink() {
 		return -fuse.EINVAL, ""
@@ -427,6 +464,9 @@ func (view *Dpfs) Access(name string, mask uint32) int {
 	}
 	if relative == "." {
 		return 0
+	}
+	if err := view.ensureDirectoryLoaded(path.Dir(relative)); err != nil {
+		return -fuse.EIO
 	}
 	entry, found := view.lookup(relative)
 	if !found || entry == nil {
@@ -453,6 +493,9 @@ func (view *Dpfs) Opendir(name string) (int, uint64) {
 		return -fuse.ENOENT, 0
 	}
 	if relative != "." {
+		if err := view.ensureDirectoryLoaded(path.Dir(relative)); err != nil {
+			return -fuse.EIO, 0
+		}
 		entry, found := view.lookup(relative)
 		if !found || entry == nil {
 			return -fuse.ENOENT, 0
