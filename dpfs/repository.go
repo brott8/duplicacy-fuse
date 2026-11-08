@@ -192,19 +192,12 @@ func loadSnapshotEntries(config *duplicacy.Config, storage duplicacy.Storage, sn
 	defer operator.Stop()
 
 	entries := make([]*duplicacy.Entry, 0, snapshot.NumberOfFiles)
-	fileCount := int64(0)
 	snapshot.ListRemoteFiles(config, operator, func(entry *duplicacy.Entry) bool {
 		entries = append(entries, entry)
-		if entry.IsFile() {
-			fileCount++
-		}
 		return true
 	})
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("snapshot contains no file entries")
-	}
-	if snapshot.NumberOfFiles > 0 && fileCount != snapshot.NumberOfFiles {
-		return nil, fmt.Errorf("loaded %d snapshot files, expected %d", fileCount, snapshot.NumberOfFiles)
 	}
 	return entries, nil
 }
