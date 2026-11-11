@@ -1,0 +1,113 @@
+name: Update Duplicacy library
+
+on:
+  schedule:
+    - cron: '0 7 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 1.26.x
+          cache: true
+
+      - name: Install FUSE2 build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libfuse-dev pkg-config
+
+      - name: Resolve latest Duplicacy release
+        id: release
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const release = await github.rest.repos.getLatestRelease({
+              owner: 'gilbertchen',
+              repo: 'duplicacy',
+            });
+            core.setOutput('tag', release.data.tag_name);
+
+      - name: Resolve release commit
+        id: commit
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -eu
+          refs="$(git ls-remote https://github.com/gilbertchen/duplicacy.git \
+            "refs/tags/${RELEASE_TAG}" "refs/tags/${RELEASE_TAG}^{}")"
+          commit="$(printf '%s\n' "$refs" | awk '$2 ~ /\^\{\}$/ { print $1; exit }')"
+          if [ -z "$commit" ]; then
+            commit="$(printf '%s\n' "$refs" | awk -v ref="refs/tags/${RELEASE_TAG}" '$2 == ref { print $1; exit }')"
+          fi
+          if [ -z "$commit" ]; then
+            printf 'Could not resolve Duplicacy release tag %s\n' "$RELEASE_TAG" >&2
+            exit 1
+          fi
+          printf 'sha=%s\n' "$commit" >> "$GITHUB_OUTPUT"
+
+      - name: Update root module pin
+        env:
+          DUPLICACY_COMMIT: ${{ steps.commit.outputs.sha }}
+        run: |
+          go get "github.com/gilbertchen/duplicacy@${DUPLICACY_COMMIT}"
+          go mod tidy
+
+      - name: Update dpfs module pin
+        working-directory: dpfs
+        env:
+          DUPLICACY_COMMIT: ${{ steps.commit.outputs.sha }}
+        run: |
+          go get "github.com/gilbertchen/duplicacy@${DUPLICACY_COMMIT}"
+          go mod tidy
+
+      - name: Verify both modules use the same revision
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          RELEASE_COMMIT: ${{ steps.commit.outputs.sha }}
+        run: |
+          set -eu
+          root_version="$(go list -m -f '{{.Version}}' github.com/gilbertchen/duplicacy)"
+          dpfs_version="$(go -C dpfs list -m -f '{{.Version}}' github.com/gilbertchen/duplicacy)"
+          if [ "$root_version" != "$dpfs_version" ]; then
+            printf 'Module pins differ: root=%s dpfs=%s\n' "$root_version" "$dpfs_version" >&2
+            exit 1
+          fi
+          printf 'Duplicacy %s (%s) resolved to %s\n' "$RELEASE_TAG" "$RELEASE_COMMIT" "$root_version"
+
+      - name: Test root module
+        run: go test ./...
+
+      - name: Race-test root module
+        run: go test -race ./...
+
+      - name: Build Linux binary
+        run: go build ./...
+
+      - name: Test dpfs module
+        working-directory: dpfs
+        run: go test ./...
+
+      - name: Race-test dpfs module
+        working-directory: dpfs
+        run: go test -race ./...
+
+      - name: Open dependency update PR
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: automation/duplicacy-${{ steps.release.outputs.tag }}
+          delete-branch: true
+          commit-message: 'chore: update Duplicacy library to ${{ steps.release.outputs.tag }}'
+          title: 'chore: update Duplicacy library to ${{ steps.release.outputs.tag }}'
+          body: |
+            Automated update to the official Duplicacy release `${{ steps.release.outputs.tag }}` (`${{ steps.commit.outputs.sha }}`).
+
+            Both Go modules were updated to the same commit and tidied. Root and `dpfs` unit and race tests plus the Linux build passed before this PR was opened.
+
+            Review upstream changes and the Go/toolchain requirement before merging. This PR is not auto-merged.

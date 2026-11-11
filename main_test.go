@@ -3,9 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
+
+	"gitlab.com/andrewheberle/duplicacy-fuse/dpfs"
 )
 
 func TestHistoryArgs(t *testing.T) {
@@ -96,5 +101,62 @@ func TestCommandHelpSucceeds(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "repository directory") {
 		t.Fatalf("help output lacks command options: %s", output.String())
+	}
+}
+
+func TestRunDuplicacyUsesRepositoryPasswordAndPreservesOutput(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test fake executable uses a POSIX shell script")
+	}
+
+	root := t.TempDir()
+	repository := filepath.Join(root, "repository")
+	if err := os.Mkdir(repository, 0700); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(root, "duplicacy")
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$PWD\" \"$DUPLICACY_NAS_PASSWORD\" \"$@\" > \"$DUPLICACY_FUSE_CAPTURE\"\n" +
+		"printf 'stdout marker\\n'\n" +
+		"printf 'stderr marker\\n' >&2\n" +
+		"exit \"${DUPLICACY_FUSE_EXIT:-0}\"\n"
+	if err := os.WriteFile(executable, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	capture := filepath.Join(root, "invocation.txt")
+	t.Setenv("DUPLICACY_FUSE_CAPTURE", capture)
+	t.Setenv("DUPLICACY_NAS_PASSWORD", "inherited-password")
+	t.Setenv("DUPLICACY_FUSE_EXIT", "0")
+	selection := &dpfs.Selection{Repository: repository, Storage: "nas", Password: "selected-password"}
+
+	stdout, stderr, err := runDuplicacy(context.Background(), executable, selection,
+		[]string{"history", "-storage", "nas", "file with spaces.txt"})
+	if err != nil {
+		t.Fatalf("runDuplicacy returned error: %v", err)
+	}
+	if stdout != "stdout marker\n" || stderr != "stderr marker\n" {
+		t.Fatalf("command output = %q / %q", stdout, stderr)
+	}
+	invocation, err := os.ReadFile(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantInvocation := strings.Join([]string{
+		repository,
+		"selected-password",
+		"history",
+		"-storage",
+		"nas",
+		"file with spaces.txt",
+		"",
+	}, "\n")
+	if string(invocation) != wantInvocation {
+		t.Fatalf("captured invocation = %q, want %q", invocation, wantInvocation)
+	}
+
+	t.Setenv("DUPLICACY_FUSE_EXIT", "7")
+	stdout, stderr, err = runDuplicacy(context.Background(), executable, selection, []string{"list"})
+	if err == nil || stdout != "stdout marker\n" || stderr != "stderr marker\n" {
+		t.Fatalf("failed command result = %q / %q / %v", stdout, stderr, err)
 	}
 }

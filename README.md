@@ -14,7 +14,7 @@ On Manjaro, install Go, GCC, pkgconf, and the FUSE2 development/runtime package:
 sudo pacman -S go gcc pkgconf fuse2
 ```
 
-Mounting and directory history use the embedded Duplicacy Go library and do not require the CLI. File history and `revisions` invoke an external Duplicacy CLI; install an SMB-capable version and put it on `PATH` or pass `--duplicacy-bin`. User mounts require access to `/dev/fuse` and the `fusermount` helper provided by FUSE2.
+Mounting uses the embedded Duplicacy Go library and does not require the CLI. File history, revision listing, and directory-history revision discovery invoke the external Duplicacy CLI; install an SMB-capable version and put it on `PATH` or pass `--duplicacy-bin`. User mounts require access to `/dev/fuse` and the `fusermount` helper provided by FUSE2.
 
 Build the Linux FUSE2 binary from the repository:
 
@@ -28,7 +28,9 @@ The build uses cgofuse v1.6.0's default FUSE2 API. FUSE3 can be selected manuall
 
 The repository path is explicit. If exactly one storage is configured it is selected automatically; otherwise pass `--storage` to avoid choosing the wrong remote. The configured snapshot ID is used unless `--snapshot` is provided.
 
-File history uses Duplicacy's `history` command:
+File history delegates to Duplicacy's native `history` command. Revision listing delegates to `duplicacy list`; directory history also uses `list` to discover revisions, then the embedded library reads each revision's manifest to test whether the exact directory exists. This split reuses Duplicacy's established history and revision-listing behavior instead of reimplementing it, while directory manifests and mounted file data are read directly through the library.
+
+File history example:
 
 ```sh
 ./duplicacy-fuse history --repo /path/to/repo --storage nas --path 'src/main.go'
@@ -68,7 +70,7 @@ For current-format snapshots mounted at the repository root, directory entries a
 
 Use `--debug` on `mount` to log setup timings, entries scanned per directory, and chunk read/cache timing. Duplicacy INFO/TRACE logs are suppressed in debug/background mode to avoid exposing key material; warnings and errors remain visible. Debug output may contain repository paths and directory names, so review it before sharing.
 
-Use `duplicacy-fuse revisions` or file history to discover revisions. These operations invoke an external Duplicacy CLI; use an SMB-capable CLI and pass `--duplicacy-bin` when it is not on `PATH`. Directory history and mounting use the embedded Duplicacy Go library. When multiple storages are configured, `--storage` is required. `--password` is the Duplicacy storage-encryption password, not the SMB login password. Direct `smb://` storage is supported; its password is read from Duplicacy's saved `smb_password` preference/keyring or `DUPLICACY_<STORAGE_NAME>_SMB_PASSWORD` (for example, `DUPLICACY_UNRAID_SMB_PASSWORD`). SMB reads retry once after recognized transport or expired-session errors when no partial chunk has been received; if reconnecting fails, remount to start a fresh session. Avoid putting either password in process arguments.
+Use `duplicacy-fuse revisions` or file history to discover revisions. File history and revision listing use an external Duplicacy CLI; directory history uses it for revision discovery, then uses the embedded library for manifest checks. Mounting uses the embedded Duplicacy Go library for snapshot metadata and on-demand chunk reads, which provide the direct access needed by the read-only FUSE filesystem. Pass `--duplicacy-bin` to select the CLI executable when it is not on `PATH`. CLI-backed operations run with the selected repository as their working directory and use the CLI's normal configuration and behavior. When multiple storages are configured, `--storage` is required. `--password` is the Duplicacy storage-encryption password, not the SMB login password. Direct `smb://` storage is supported; its password is read from Duplicacy's saved `smb_password` preference/keyring or `DUPLICACY_<STORAGE_NAME>_SMB_PASSWORD` (for example, `DUPLICACY_UNRAID_SMB_PASSWORD`). SMB reads retry once after recognized transport or expired-session errors when no partial chunk has been received; if reconnecting fails, remount to start a fresh session. Avoid putting either password in process arguments.
 
 Unmount from another terminal:
 
@@ -76,7 +78,7 @@ Unmount from another terminal:
 fusermount -u /mnt/duplicacy-history
 ```
 
-The mount process exits after unmount. The FUSE view rejects file writes and never restores file contents into the source repository, but that does not guarantee zero backend-side effects. Snapshot loading calls Duplicacy's `CreateDirectory` for `snapshots/<snapshot-id>` (the directory should already exist for a valid revision). Use a disposable storage copy if the backend must remain strictly unchanged. File history and `revisions` invoke the external CLI with its normal configuration and hook behavior; directory history uses the embedded library.
+The mount process exits after unmount. The FUSE view rejects file writes and never restores file contents into the source repository, but that does not guarantee zero backend-side effects. Snapshot loading calls Duplicacy's `CreateDirectory` for `snapshots/<snapshot-id>` (the directory should already exist for a valid revision). Use a disposable storage copy if the backend must remain strictly unchanged. File history, revision listing, and directory-history revision discovery invoke the external CLI with its normal configuration and hook behavior; directory-history manifest checks and the mounted view use the embedded library.
 
 Archived symlinks are exposed with their original targets. Absolute or `..` targets may resolve outside the mount in the host filesystem, so this mount is not a security sandbox.
 
@@ -98,7 +100,11 @@ Revision manifests and chunk indexes are metadata and are loaded once per mount.
 
 ## Testing
 
-The repository contains separate Go modules. Run tests in both:
+The repository contains separate Go modules. CI runs tests in both modules, including race tests, and builds the Linux binary. Tests are hermetic: they do not mount FUSE or require live backup storage or credentials. The dependency regression suite exercises Duplicacy's embedded library against a local fixture and checks the external CLI invocation contract with a fake executable.
+
+The weekly dependency workflow checks the latest official Duplicacy release, updates the same pinned source commit in both modules, and opens a PR only after tests, race tests, and the Linux build pass. It does not auto-merge. The workflow is also available for manual dispatch. The external CLI used for history and revision commands is independently versioned and is not updated by this workflow.
+
+Run tests locally in both modules:
 
 ```sh
 go test ./...
@@ -107,4 +113,4 @@ go test -race ./...
 (cd dpfs && go test -race ./...)
 ```
 
-Build and mount integration tests require a Go 1.17+ toolchain, FUSE2 development headers, a usable Duplicacy repository, and a user-level FUSE mount environment.
+Build using the Go version required by the root and `dpfs` module files, plus GCC, pkg-config, and FUSE2 development headers. CI and the dependency-update workflow use Go 1.26 because the current upstream Duplicacy release requires it; accepting that dependency update will raise the project minimum. Running a mount additionally requires a usable Duplicacy repository, a user-level FUSE environment, and access to `/dev/fuse`. CLI-backed history and revision commands also require an SMB-capable Duplicacy CLI; mounting does not.
