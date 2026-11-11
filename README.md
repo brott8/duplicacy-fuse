@@ -14,7 +14,7 @@ On Manjaro, install Go, GCC, pkgconf, and the FUSE2 development/runtime package:
 sudo pacman -S go gcc pkgconf fuse2
 ```
 
-Install the Duplicacy CLI separately and ensure `duplicacy` is on `PATH`. User mounts require access to `/dev/fuse` and the `fusermount` helper provided by FUSE2.
+Mounting and directory history use the embedded Duplicacy Go library and do not require the CLI. File history and `revisions` invoke an external Duplicacy CLI; install an SMB-capable version and put it on `PATH` or pass `--duplicacy-bin`. User mounts require access to `/dev/fuse` and the `fusermount` helper provided by FUSE2.
 
 Build the Linux FUSE2 binary from the repository:
 
@@ -51,7 +51,7 @@ JSON output is suitable for shell tools or a later Nautilus context-menu caller.
 
 ## Mount
 
-Pass a positive revision and a repository-relative selected path. If `--path` names a file, the FUSE root contains only that file; if it names a directory, the mounted root is that directory and contains only its subtree. Omitting `--path` exposes the repository root. All mounts are read-only and run in the foreground by default. On Linux, `--background` starts a detached mount and returns after FUSE initialization; it prints the path to a private log file.
+Pass a positive revision and a repository-relative selected path. If `--path` names a file, the FUSE root contains only that file; if it names a directory, the mounted root is that directory and contains only its subtree. Omitting `--path` exposes the repository root. All mounts are read-only and run in the foreground by default. On Linux, `--background` starts a detached mount and returns after FUSE initialization; it prints the path to a mode-0600 log file under the system temporary directory.
 
 For current-format snapshots mounted at the repository root, directory entries are streamed and cached when a directory is first listed, rather than building the full file tree at mount startup. Explicit `--path` views still load metadata up front. Legacy JSON-format snapshots must be sorted by Duplicacy before listing, so their first directory browse still loads all metadata. The snapshot format has no random-access index, so first access to a deep directory may scan preceding metadata entries.
 
@@ -68,7 +68,7 @@ For current-format snapshots mounted at the repository root, directory entries a
 
 Use `--debug` on `mount` to log setup timings, entries scanned per directory, and chunk read/cache timing. Duplicacy INFO/TRACE logs are suppressed in debug/background mode to avoid exposing key material; warnings and errors remain visible. Debug output may contain repository paths and directory names, so review it before sharing.
 
-Use `duplicacy-fuse revisions` or file history to discover revisions. These commands invoke an external Duplicacy CLI; use an SMB-capable CLI and pass `--duplicacy-bin` when it is not on `PATH`. Mounting uses the Duplicacy Go library directly. When multiple storages are configured, `--storage` is required. `--password` is the Duplicacy storage-encryption password, not the SMB login password. Direct `smb://` storage is supported; its password is read from Duplicacy's saved `smb_password` preference/keyring or `DUPLICACY_<STORAGE_NAME>_SMB_PASSWORD` (for example, `DUPLICACY_UNRAID_SMB_PASSWORD`). SMB reads retry once after recognized transport or expired-session errors when no partial chunk has been received; if reconnecting fails, remount to start a fresh session. Avoid putting either password in process arguments.
+Use `duplicacy-fuse revisions` or file history to discover revisions. These operations invoke an external Duplicacy CLI; use an SMB-capable CLI and pass `--duplicacy-bin` when it is not on `PATH`. Directory history and mounting use the embedded Duplicacy Go library. When multiple storages are configured, `--storage` is required. `--password` is the Duplicacy storage-encryption password, not the SMB login password. Direct `smb://` storage is supported; its password is read from Duplicacy's saved `smb_password` preference/keyring or `DUPLICACY_<STORAGE_NAME>_SMB_PASSWORD` (for example, `DUPLICACY_UNRAID_SMB_PASSWORD`). SMB reads retry once after recognized transport or expired-session errors when no partial chunk has been received; if reconnecting fails, remount to start a fresh session. Avoid putting either password in process arguments.
 
 Unmount from another terminal:
 
@@ -76,13 +76,15 @@ Unmount from another terminal:
 fusermount -u /mnt/duplicacy-history
 ```
 
-The mount process exits after unmount. The source repository is never used as a destination for restored file data.
+The mount process exits after unmount. The FUSE view rejects file writes and never restores file contents into the source repository, but that does not guarantee zero backend-side effects. Snapshot loading calls Duplicacy's `CreateDirectory` for `snapshots/<snapshot-id>` (the directory should already exist for a valid revision). Use a disposable storage copy if the backend must remain strictly unchanged. File history and `revisions` invoke the external CLI with its normal configuration and hook behavior; directory history uses the embedded library.
+
+Archived symlinks are exposed with their original targets. Absolute or `..` targets may resolve outside the mount in the host filesystem, so this mount is not a security sandbox.
 
 FUSE chunk reads support Duplicacy's password-based storage encryption. RSA-encrypted file chunks are not supported because this application does not load an RSA private key and currently fail with a read error.
 
 ## Chunk Cache
 
-Requested chunks are fetched on demand and stored as plaintext outside the repository, by default under `${XDG_CACHE_HOME:-$HOME/.cache}/duplicacy-fuse/chunks`. Cache files are created with owner-only permissions; protect custom cache locations accordingly. `--cache-dir` selects another location and must resolve outside the repository. `--cache-size` sets the maximum retained payload size; LRU eviction removes old chunks. A zero size disables persistent caching. Concurrent requests for the same chunk share one download. Reads use independent in-memory copies, so an evicted disk entry cannot invalidate an active read.
+Requested chunks are fetched on demand and stored as plaintext outside the repository, by default under `${XDG_CACHE_HOME:-$HOME/.cache}/duplicacy-fuse/chunks`. Cache files are created with owner-only permissions; protect custom cache locations accordingly. `--cache-dir` selects another location and must resolve outside both the repository and backup storage; the application checks only that it is outside the repository. `--cache-size` sets the maximum retained payload size; LRU eviction removes old chunks. A zero size disables persistent chunk-payload caching. Concurrent requests for the same chunk share one download. Reads use independent in-memory copies, so an evicted disk entry cannot invalidate an active read.
 
 Clear the default chunk cache with:
 
