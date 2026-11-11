@@ -99,7 +99,7 @@ jobs:
         run: go test -race ./...
 
       - name: Open dependency update PR
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@v8
         with:
           branch: automation/duplicacy-${{ steps.release.outputs.tag }}
           delete-branch: true

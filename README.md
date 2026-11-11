@@ -102,7 +102,7 @@ Revision manifests and chunk indexes are metadata and are loaded once per mount.
 
 The repository contains separate Go modules. CI runs tests in both modules, including race tests, and builds the Linux binary. Tests are hermetic: they do not mount FUSE or require live backup storage or credentials. The dependency regression suite exercises Duplicacy's embedded library against a local fixture and checks the external CLI invocation contract with a fake executable.
 
-The weekly dependency workflow checks the latest official Duplicacy release, updates the same pinned source commit in both modules, and opens a PR only after tests, race tests, and the Linux build pass. It does not auto-merge. The workflow is also available for manual dispatch. The external CLI used for history and revision commands is independently versioned and is not updated by this workflow.
+The weekly dependency workflow checks the latest official Duplicacy release, updates the same pinned source commit in both modules, and opens a PR only after tests, race tests, and the Linux build pass. It does not auto-merge. The workflow is also available for manual dispatch. Repository Actions settings must allow workflows to create pull requests. The external CLI used for history and revision commands is independently versioned and is not updated by this workflow.
 
 Run tests locally in both modules:
 
