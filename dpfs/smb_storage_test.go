@@ -14,14 +14,18 @@ type reconnectTestStorage struct {
 	duplicacy.Storage
 	findErr       error
 	findCalls     int
+	findFossils   []bool
+	findMetadata  []bool
 	downloadErr   error
 	downloadData  []byte
 	downloadPart  []byte
 	downloadCalls int
 }
 
-func (storage *reconnectTestStorage) FindChunk(threadIndex int, chunkID string, isFossil bool) (string, bool, int64, error) {
+func (storage *reconnectTestStorage) FindChunk(threadIndex int, chunkID string, isFossil bool, isMetadata bool) (string, bool, int64, error) {
 	storage.findCalls++
+	storage.findFossils = append(storage.findFossils, isFossil)
+	storage.findMetadata = append(storage.findMetadata, isMetadata)
 	if storage.findErr != nil {
 		return "", false, 0, storage.findErr
 	}
@@ -52,12 +56,15 @@ func TestSMBReconnectRetriesFindChunkOnce(t *testing.T) {
 		},
 	}
 
-	path, exists, size, err := storage.FindChunk(0, "fixture", false)
+	path, exists, size, err := storage.FindChunk(0, "fixture", false, true)
 	if err != nil || path != "chunks/fixture" || !exists || size != 7 {
 		t.Fatalf("FindChunk() = %q, %t, %d, %v", path, exists, size, err)
 	}
 	if original.findCalls != 1 || replacement.findCalls != 1 || reopenCalls != 1 {
 		t.Fatalf("calls = original:%d replacement:%d reopen:%d", original.findCalls, replacement.findCalls, reopenCalls)
+	}
+	if original.findFossils[0] || replacement.findFossils[0] || !original.findMetadata[0] || !replacement.findMetadata[0] {
+		t.Fatal("chunk kind flags were not preserved through the reconnect")
 	}
 }
 
@@ -106,7 +113,7 @@ func TestSMBReconnectDoesNotRetryPartialOrNonTransientReads(t *testing.T) {
 	}
 
 	original.findErr = os.ErrPermission
-	if _, _, _, err := storage.FindChunk(0, "fixture", false); !errors.Is(err, os.ErrPermission) {
+	if _, _, _, err := storage.FindChunk(0, "fixture", false, false); !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("permission error = %v", err)
 	}
 	if reopenCalls != 0 {

@@ -72,9 +72,9 @@ func (storage *smbReconnectStorage) GetFileInfo(threadIndex int, filePath string
 	return exists, isDir, size, err
 }
 
-func (storage *smbReconnectStorage) FindChunk(threadIndex int, chunkID string, isFossil bool) (filePath string, exists bool, size int64, err error) {
+func (storage *smbReconnectStorage) FindChunk(threadIndex int, chunkID string, isFossil bool, isMetadata bool) (filePath string, exists bool, size int64, err error) {
 	err = storage.retryRead(func(current duplicacy.Storage) error {
-		filePath, exists, size, err = current.FindChunk(threadIndex, chunkID, isFossil)
+		filePath, exists, size, err = current.FindChunk(threadIndex, chunkID, isFossil, isMetadata)
 		return err
 	}, func() bool { return true })
 	return filePath, exists, size, err

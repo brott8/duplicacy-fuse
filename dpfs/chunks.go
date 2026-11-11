@@ -8,12 +8,12 @@ import (
 
 func fetchChunk(config *duplicacy.Config, storage duplicacy.Storage, chunkHash string) ([]byte, error) {
 	chunkID := config.GetChunkIDFromHash(chunkHash)
-	chunkPath, exists, _, err := storage.FindChunk(0, chunkID, false)
+	chunkPath, exists, _, err := storage.FindChunk(0, chunkID, false, false)
 	if err != nil {
 		return nil, fmt.Errorf("find chunk %s: %w", chunkID, err)
 	}
 	if !exists {
-		chunkPath, exists, _, err = storage.FindChunk(0, chunkID, true)
+		chunkPath, exists, _, err = storage.FindChunk(0, chunkID, true, false)
 		if err != nil {
 			return nil, fmt.Errorf("find fossil chunk %s: %w", chunkID, err)
 		}

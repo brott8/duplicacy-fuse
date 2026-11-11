@@ -4,3 +4,6 @@ duplicacy-fuse
 duplicacy-fuse.exe~
 duplicacy-fuse~
 duplicacy_fuse_*
+
+# Ignore browser automation artifacts
+.playwright-mcp/
