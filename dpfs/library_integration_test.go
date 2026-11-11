@@ -67,6 +67,28 @@ func TestEmbeddedLibraryReadsLocalSnapshot(t *testing.T) {
 		t.Fatal("failed to create fixture snapshot")
 	}
 
+	prompted := false
+	revisions, err := ListRevisions(SelectionOptions{Repository: repository, Storage: preference.Name}, func(int, error) (string, error) {
+		prompted = true
+		return "unexpected", nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompted {
+		t.Fatal("unencrypted storage prompted for a password")
+	}
+	if len(revisions) != 1 || revisions[0].Revision != 1 || revisions[0].CreatedAt == 0 {
+		t.Fatalf("listed revisions = %#v, want revision 1 with a creation time", revisions)
+	}
+	snapshotIDs, err := ListSnapshotIDs(SelectionOptions{Repository: repository, Storage: preference.Name}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshotIDs) != 1 || snapshotIDs[0] != preference.SnapshotID {
+		t.Fatalf("listed snapshot IDs = %#v, want %q", snapshotIDs, preference.SnapshotID)
+	}
+
 	view, err := NewView(MountOptions{
 		SelectionOptions: SelectionOptions{Repository: repository, Storage: preference.Name},
 		Revision:         1,

@@ -24,20 +24,21 @@ import (
 const defaultChunkCacheBytes = int64(10 * 1024 * 1024 * 1024)
 
 type cliOptions struct {
-	repository string
-	storage    string
-	snapshot   string
-	password   string
-	path       string
-	revision   int
-	mountpoint string
-	cacheDir   string
-	cacheBytes int64
-	duplicacy  string
-	json       bool
-	directory  bool
-	debug      bool
-	background bool
+	repository   string
+	storage      string
+	snapshot     string
+	password     string
+	path         string
+	revision     int
+	mountpoint   string
+	cacheDir     string
+	cacheBytes   int64
+	duplicacy    string
+	json         bool
+	directory    bool
+	debug        bool
+	background   bool
+	guiControlFD int
 }
 
 type fileVersion struct {
@@ -67,7 +68,7 @@ func main() {
 
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 {
-		return errors.New("usage: duplicacy-fuse <mount|history|revisions|clear-cache> [options]")
+		return errors.New("usage: duplicacy-fuse <mount|history|revisions|clear-cache|gui-storages|gui-snapshots|gui-revisions> [options]")
 	}
 	var err error
 	switch args[0] {
@@ -79,6 +80,12 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) error {
 		err = runRevisions(ctx, args[1:], stdout, stderr)
 	case "clear-cache":
 		err = runClearCache(args[1:], stderr)
+	case "gui-storages":
+		err = runGUIStorages(args[1:], stdout, stderr)
+	case "gui-snapshots":
+		err = runGUISnapshots(args[1:], stdout, stderr)
+	case "gui-revisions":
+		err = runGUIRevisions(args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -111,6 +118,7 @@ func runMount(args []string, stderr io.Writer) error {
 	fs.StringVar(&options.cacheDir, "cache-dir", "", "persistent chunk cache directory")
 	fs.BoolVar(&options.debug, "debug", false, "log mount timings, directory scans, chunk reads, and cache activity")
 	fs.BoolVar(&options.background, "background", false, "return after the FUSE mount is ready")
+	fs.IntVar(&options.guiControlFD, "gui-control-fd", 0, "private desktop IPC socket descriptor (internal)")
 	cacheSize := fs.String("cache-size", "10GiB", "maximum persistent chunk cache size")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -121,12 +129,28 @@ func runMount(args []string, stderr io.Writer) error {
 	if options.repository == "" || options.mountpoint == "" || options.revision < 1 {
 		return errors.New("mount requires --repo, --mountpoint, and a positive --revision")
 	}
+	var guiControl *guiMountControl
+	if options.guiControlFD != 0 {
+		if options.guiControlFD < 3 || options.background || options.password != "" {
+			return errors.New("invalid GUI mount helper options")
+		}
+		var err error
+		guiControl, err = newGUIMountControl(options.guiControlFD)
+		if err != nil {
+			return err
+		}
+		defer guiControl.Close()
+		if err := validateGUIMountpoint(options.mountpoint); err != nil {
+			_ = guiControl.send(guiIPCMessage{Type: "failed", Message: err.Error()})
+			return err
+		}
+	}
 	parsedCacheSize, err := parseByteSize(*cacheSize)
 	if err != nil {
 		return fmt.Errorf("invalid --cache-size: %w", err)
 	}
 	options.cacheBytes = parsedCacheSize
-	if options.debug || options.background {
+	if options.debug || options.background || guiControl != nil {
 		duplicacy.SetLoggingLevel(duplicacy.WARN)
 		defer duplicacy.SetLoggingLevel(duplicacy.INFO)
 	}
@@ -143,12 +167,19 @@ func runMount(args []string, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	var passwordPrompt dpfs.PasswordPrompt
+	if guiControl != nil {
+		passwordPrompt = func(attempt int, previousError error) (string, error) {
+			return guiControl.requestPassword(attempt, previousError)
+		}
+	}
 	view, err := dpfs.NewView(dpfs.MountOptions{
 		SelectionOptions: dpfs.SelectionOptions{
-			Repository: options.repository,
-			Storage:    options.storage,
-			SnapshotID: options.snapshot,
-			Password:   options.password,
+			Repository:           options.repository,
+			Storage:              options.storage,
+			SnapshotID:           options.snapshot,
+			Password:             options.password,
+			IgnoreStoredPassword: guiControl != nil,
 		},
 		Revision:     options.revision,
 		SelectedPath: options.path,
@@ -156,16 +187,160 @@ func runMount(args []string, stderr io.Writer) error {
 		CacheBytes:   options.cacheBytes,
 		Debug:        options.debug,
 		DebugWriter:  stderr,
-		OnInit:       onInit,
+		OnReadError: func() {
+			if guiControl != nil {
+				guiControl.notifyReadError()
+			}
+		},
+		OnInit: func() {
+			if onInit != nil {
+				onInit()
+			}
+			if guiControl != nil {
+				go guiControl.watchMount(options.mountpoint)
+				_ = guiControl.send(guiIPCMessage{Type: "mounted"})
+			}
+		},
+		PasswordPrompt: passwordPrompt,
 	})
 	if err != nil {
+		if guiControl != nil {
+			_ = guiControl.send(guiIPCMessage{Type: "failed", Message: err.Error()})
+		}
 		return err
 	}
 	host := fuse.NewFileSystemHost(view)
-	if !host.Mount(options.mountpoint, []string{"-f", "-o", "ro,default_permissions"}) {
+	fuseOptions := "ro,default_permissions"
+	if guiControl != nil {
+		fuseOptions += ",auto_unmount"
+	}
+	if !host.Mount(options.mountpoint, []string{"-f", "-o", fuseOptions}) {
+		if guiControl != nil {
+			if guiControl.isUnmountRequested() {
+				_ = guiControl.send(guiIPCMessage{Type: "unmounted"})
+				return nil
+			}
+			_ = guiControl.send(guiIPCMessage{Type: "failed", Message: "FUSE mount failed"})
+		}
 		return fmt.Errorf("failed to mount %s", options.mountpoint)
 	}
+	if guiControl != nil {
+		_ = guiControl.send(guiIPCMessage{Type: "unmounted"})
+	}
 	return nil
+}
+
+func runGUIStorages(args []string, stdout, stderr io.Writer) error {
+	restoreLogger := discardDuplicacyLogs()
+	defer restoreLogger()
+	fs := newFlagSet("gui-storages", stderr)
+	repository := fs.String("repo", "", "repository directory (required)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || *repository == "" {
+		return errors.New("gui-storages requires --repo and accepts no positional arguments")
+	}
+	storages, err := dpfs.ConfiguredStorages(*repository)
+	if err != nil {
+		return err
+	}
+	return json.NewEncoder(stdout).Encode(storages)
+}
+
+func runGUIRevisions(args []string, _ io.Writer, stderr io.Writer) error {
+	fs := newFlagSet("gui-revisions", stderr)
+	options := cliOptions{}
+	addRepositoryFlags(fs, &options)
+	fs.IntVar(&options.guiControlFD, "gui-control-fd", 0, "private desktop IPC socket descriptor (internal)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || options.guiControlFD < 3 || options.repository == "" {
+		return errors.New("gui-revisions requires --repo and a private --gui-control-fd")
+	}
+	if options.password != "" {
+		return errors.New("GUI revision discovery does not accept password arguments")
+	}
+	control, err := newGUIMountControl(options.guiControlFD)
+	if err != nil {
+		return err
+	}
+	defer control.Close()
+	restoreLogger := discardDuplicacyLogs()
+	defer restoreLogger()
+	duplicacy.SetLoggingLevel(duplicacy.WARN)
+	defer duplicacy.SetLoggingLevel(duplicacy.INFO)
+	revisions, err := dpfs.ListRevisions(dpfs.SelectionOptions{
+		Repository:           options.repository,
+		Storage:              options.storage,
+		SnapshotID:           options.snapshot,
+		IgnoreStoredPassword: true,
+	}, func(attempt int, previousError error) (string, error) {
+		return control.requestPassword(attempt, previousError)
+	})
+	if err != nil {
+		_ = control.send(guiIPCMessage{Type: "failed", Message: err.Error()})
+		return err
+	}
+	revisionData, err := json.Marshal(revisions)
+	if err != nil {
+		return err
+	}
+	if err := control.send(guiIPCMessage{Type: "revisions-ready", Revisions: revisionData}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func runGUISnapshots(args []string, _ io.Writer, stderr io.Writer) error {
+	fs := newFlagSet("gui-snapshots", stderr)
+	options := cliOptions{}
+	addRepositoryFlags(fs, &options)
+	fs.IntVar(&options.guiControlFD, "gui-control-fd", 0, "private desktop IPC socket descriptor (internal)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 || options.guiControlFD < 3 || options.repository == "" {
+		return errors.New("gui-snapshots requires --repo and a private --gui-control-fd")
+	}
+	if options.password != "" {
+		return errors.New("GUI snapshot discovery does not accept password arguments")
+	}
+	control, err := newGUIMountControl(options.guiControlFD)
+	if err != nil {
+		return err
+	}
+	defer control.Close()
+	restoreLogger := discardDuplicacyLogs()
+	defer restoreLogger()
+	duplicacy.SetLoggingLevel(duplicacy.WARN)
+	defer duplicacy.SetLoggingLevel(duplicacy.INFO)
+	snapshotIDs, err := dpfs.ListSnapshotIDs(dpfs.SelectionOptions{
+		Repository:           options.repository,
+		Storage:              options.storage,
+		IgnoreStoredPassword: true,
+	}, func(attempt int, previousError error) (string, error) {
+		return control.requestPassword(attempt, previousError)
+	})
+	if err != nil {
+		_ = control.send(guiIPCMessage{Type: "failed", Message: err.Error()})
+		return err
+	}
+	snapshotData, err := json.Marshal(snapshotIDs)
+	if err != nil {
+		return err
+	}
+	if err := control.send(guiIPCMessage{Type: "snapshots-ready", SnapshotIDs: snapshotData}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func discardDuplicacyLogs() func() {
+	previous := duplicacy.LogFunction
+	duplicacy.LogFunction = func(int, string, string) {}
+	return func() { duplicacy.LogFunction = previous }
 }
 
 func runHistory(ctx context.Context, args []string, stdout, stderr io.Writer) error {

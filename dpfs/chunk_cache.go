@@ -35,17 +35,42 @@ func newChunkCache(dir string, maxBytes int64) (*chunkCache, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("create chunk cache: %w", err)
 	}
+	info, err := os.Lstat(dir)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("chunk cache must be a real directory")
+	}
+	if err := os.Chmod(dir, 0700); err != nil {
+		return nil, fmt.Errorf("secure chunk cache directory: %w", err)
+	}
 	marker := filepath.Join(dir, cacheMarker)
-	if _, err := os.Stat(marker); os.IsNotExist(err) {
+	markerInfo, err := os.Lstat(marker)
+	if os.IsNotExist(err) {
 		if err := ioutil.WriteFile(marker, []byte("duplicacy-fuse chunk cache\n"), 0600); err != nil {
 			return nil, fmt.Errorf("mark chunk cache directory: %w", err)
 		}
 	} else if err != nil {
 		return nil, fmt.Errorf("inspect chunk cache: %w", err)
 	} else {
+		if !markerInfo.Mode().IsRegular() {
+			return nil, fmt.Errorf("refusing to use non-regular cache marker")
+		}
 		markerData, err := ioutil.ReadFile(marker)
 		if err != nil || string(markerData) != "duplicacy-fuse chunk cache\n" {
 			return nil, fmt.Errorf("refusing to use unmarked cache directory %s", dir)
+		}
+	}
+	if err := os.Chmod(marker, 0600); err != nil {
+		return nil, fmt.Errorf("secure chunk cache marker: %w", err)
+	}
+	files, err := ioutil.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("inspect chunk cache files: %w", err)
+	}
+	for _, file := range files {
+		if file.Mode().IsRegular() && isCacheFile(file.Name()) {
+			if err := os.Chmod(filepath.Join(dir, file.Name()), 0600); err != nil {
+				return nil, fmt.Errorf("secure cached chunk: %w", err)
+			}
 		}
 	}
 	cache := &chunkCache{dir: dir, maxBytes: maxBytes, pending: make(map[string]*chunkFetch)}

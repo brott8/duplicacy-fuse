@@ -3,6 +3,7 @@ package dpfs
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,18 +13,24 @@ import (
 )
 
 type SelectionOptions struct {
-	Repository string
-	Storage    string
-	SnapshotID string
-	Password   string
+	Repository           string
+	Storage              string
+	SnapshotID           string
+	Password             string
+	IgnoreStoredPassword bool
 }
 
+var ErrPasswordRequired = errors.New("encrypted storage requires an explicit password")
+
+type PasswordPrompt func(attempt int, previousError error) (string, error)
+
 type Selection struct {
-	Repository string
-	Storage    string
-	SnapshotID string
-	Password   string
-	Preference *duplicacy.Preference
+	Repository           string
+	Storage              string
+	SnapshotID           string
+	Password             string
+	Preference           *duplicacy.Preference
+	IgnoreStoredPassword bool
 }
 
 func ResolveSelection(options SelectionOptions) (*Selection, error) {
@@ -69,15 +76,16 @@ func ResolveSelection(options SelectionOptions) (*Selection, error) {
 	}
 
 	password := options.Password
-	if password == "" {
+	if password == "" && !options.IgnoreStoredPassword {
 		password = duplicacy.GetPasswordFromPreference(*preference, "password")
 	}
 	return &Selection{
-		Repository: repository,
-		Storage:    preference.Name,
-		SnapshotID: snapshotID,
-		Password:   password,
-		Preference: preference,
+		Repository:           repository,
+		Storage:              preference.Name,
+		SnapshotID:           snapshotID,
+		Password:             password,
+		Preference:           preference,
+		IgnoreStoredPassword: options.IgnoreStoredPassword,
 	}, nil
 }
 
@@ -132,16 +140,36 @@ func cachePathOutsideRepository(repository, cacheDir string) (string, error) {
 	return absoluteCache, nil
 }
 
-func openBackupManager(selection *Selection) (*duplicacy.BackupManager, *duplicacy.Config, duplicacy.Storage, string, error) {
+func openBackupManager(selection *Selection, passwordPrompt PasswordPrompt) (*duplicacy.BackupManager, *duplicacy.Config, duplicacy.Storage, string, error) {
 	storage := duplicacy.CreateStorage(*selection.Preference, false, 1)
 	if storage == nil {
 		return nil, nil, nil, "", fmt.Errorf("failed to open storage %q", selection.Storage)
 	}
 	config, encrypted, err := duplicacy.DownloadConfig(storage, selection.Password)
 	if err != nil && encrypted && selection.Password == "" {
-		selection.Password = duplicacy.GetPassword(*selection.Preference, "password",
-			fmt.Sprintf("Enter password for storage %s:", selection.Storage), false, false)
-		config, _, err = duplicacy.DownloadConfig(storage, selection.Password)
+		if passwordPrompt == nil {
+			if selection.IgnoreStoredPassword {
+				return nil, nil, nil, "", ErrPasswordRequired
+			}
+			selection.Password = duplicacy.GetPassword(*selection.Preference, "password",
+				fmt.Sprintf("Enter password for storage %s:", selection.Storage), false, false)
+			config, _, err = duplicacy.DownloadConfig(storage, selection.Password)
+		} else {
+			for attempt := 1; attempt <= 3; attempt++ {
+				password, promptErr := passwordPrompt(attempt, err)
+				if promptErr != nil {
+					return nil, nil, nil, "", promptErr
+				}
+				if password == "" {
+					return nil, nil, nil, "", fmt.Errorf("storage password entry was cancelled")
+				}
+				selection.Password = password
+				config, _, err = duplicacy.DownloadConfig(storage, selection.Password)
+				if err == nil {
+					break
+				}
+			}
+		}
 	}
 	if err != nil {
 		return nil, nil, nil, "", fmt.Errorf("load storage configuration: %w", err)

@@ -26,6 +26,7 @@ type Dpfs struct {
 	debug               bool
 	debugWriter         io.Writer
 	onInit              func()
+	onReadError         func()
 	listSnapshotEntries func(func(*duplicacy.Entry) bool)
 	folderRoot          string
 	fileRoot            string

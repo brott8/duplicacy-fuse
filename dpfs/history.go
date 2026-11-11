@@ -24,7 +24,7 @@ func DirectoryHistory(options SelectionOptions, selectedPath string, revisions [
 	if err != nil {
 		return nil, err
 	}
-	manager, config, storage, metadataCacheDir, err := openBackupManager(selection)
+	manager, config, storage, metadataCacheDir, err := openBackupManager(selection, nil)
 	if err != nil {
 		return nil, err
 	}

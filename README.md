@@ -68,7 +68,7 @@ For current-format snapshots mounted at the repository root, directory entries a
   --cache-size 10GiB
 ```
 
-Use `--debug` on `mount` to log setup timings, entries scanned per directory, and chunk read/cache timing. Duplicacy INFO/TRACE logs are suppressed in debug/background mode to avoid exposing key material; warnings and errors remain visible. Debug output may contain repository paths and directory names, so review it before sharing.
+Use `--debug` on `mount` to log setup timings, entries scanned per directory, and chunk read/cache timing. Duplicacy INFO/TRACE logs are suppressed in debug, background, and desktop-helper modes to avoid exposing key material; warnings and errors remain visible. Debug output may contain repository paths and directory names, so review it before sharing.
 
 Use `duplicacy-fuse revisions` or file history to discover revisions. File history and revision listing use an external Duplicacy CLI; directory history uses it for revision discovery, then uses the embedded library for manifest checks. Mounting uses the embedded Duplicacy Go library for snapshot metadata and on-demand chunk reads, which provide the direct access needed by the read-only FUSE filesystem. Pass `--duplicacy-bin` to select the CLI executable when it is not on `PATH`. CLI-backed operations run with the selected repository as their working directory and use the CLI's normal configuration and behavior. When multiple storages are configured, `--storage` is required. `--password` is the Duplicacy storage-encryption password, not the SMB login password. Direct `smb://` storage is supported; its password is read from Duplicacy's saved `smb_password` preference/keyring or `DUPLICACY_<STORAGE_NAME>_SMB_PASSWORD` (for example, `DUPLICACY_UNRAID_SMB_PASSWORD`). SMB reads retry once after recognized transport or expired-session errors when no partial chunk has been received; if reconnecting fails, remount to start a fresh session. Avoid putting either password in process arguments.
 
@@ -83,6 +83,10 @@ The mount process exits after unmount. The FUSE view rejects file writes and nev
 Archived symlinks are exposed with their original targets. Absolute or `..` targets may resolve outside the mount in the host filesystem, so this mount is not a security sandbox.
 
 FUSE chunk reads support Duplicacy's password-based storage encryption. RSA-encrypted file chunks are not supported because this application does not load an RSA private key and currently fail with a read error.
+
+## GNOME Companion
+
+The GNOME desktop client is maintained as a separate companion project. It uses only the optional `gui-storages`, `gui-snapshots`, `gui-revisions`, and `--gui-control-fd` helper interfaces; this CLI remains independently buildable and does not depend on GTK or libadwaita. GUI-managed encrypted operations ignore saved/environment storage-encryption passwords and request a fresh password over a private inherited Unix socket. The desktop app never sends that password in command-line arguments or environment variables. Snapshot IDs and revisions are listed through the embedded library and do not require the external Duplicacy CLI.
 
 ## Chunk Cache
 

@@ -3,6 +3,7 @@ package dpfs
 import (
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -44,6 +45,58 @@ func TestChunkCacheBoundedLRUAndClear(t *testing.T) {
 	}
 	if err := ClearChunkCache(t.TempDir()); err == nil {
 		t.Fatal("clearing an unmarked directory should fail")
+	}
+}
+
+func TestChunkCacheEnforcesPrivatePermissions(t *testing.T) {
+	dir := t.TempDir() + "/cache"
+	if err := os.Mkdir(dir, 0777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(dir, 0777); err != nil {
+		t.Fatal(err)
+	}
+	legacyCacheFile := cacheFileName(dir, "old")
+	if err := os.WriteFile(legacyCacheFile, []byte("old cache"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cache, err := newChunkCache(dir, 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cache.storeLocked(cacheFileName(dir, "private"), []byte("plaintext")); err != nil {
+		t.Fatal(err)
+	}
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dirInfo.Mode().Perm() != 0700 {
+		t.Fatalf("cache directory mode = %o, want 700", dirInfo.Mode().Perm())
+	}
+	for _, name := range []string{filepath.Join(dir, cacheMarker), legacyCacheFile, cacheFileName(dir, "private")} {
+		info, err := os.Stat(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0600 {
+			t.Fatalf("cache file %s mode = %o, want 600", name, info.Mode().Perm())
+		}
+	}
+}
+
+func TestChunkCacheRejectsSymlinkDirectory(t *testing.T) {
+	root := t.TempDir()
+	target := root + "/target"
+	if err := os.Mkdir(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	link := root + "/link"
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newChunkCache(link, 1024); err == nil {
+		t.Fatal("cache symlink was accepted")
 	}
 }
 

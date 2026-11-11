@@ -15,13 +15,15 @@ import (
 
 type MountOptions struct {
 	SelectionOptions
-	Revision     int
-	SelectedPath string
-	CacheDir     string
-	CacheBytes   int64
-	Debug        bool
-	DebugWriter  io.Writer
-	OnInit       func()
+	Revision       int
+	SelectedPath   string
+	CacheDir       string
+	CacheBytes     int64
+	Debug          bool
+	DebugWriter    io.Writer
+	OnInit         func()
+	OnReadError    func()
+	PasswordPrompt PasswordPrompt
 }
 
 type readRange struct {
@@ -53,7 +55,7 @@ func NewView(options MountOptions) (*Dpfs, error) {
 		return nil, err
 	}
 	phaseStart = time.Now()
-	manager, config, storage, metadataCacheDir, err := openBackupManager(selection)
+	manager, config, storage, metadataCacheDir, err := openBackupManager(selection, options.PasswordPrompt)
 	if err != nil {
 		return nil, err
 	}
@@ -109,6 +111,7 @@ func NewView(options MountOptions) (*Dpfs, error) {
 		debug:          options.Debug,
 		debugWriter:    options.DebugWriter,
 		onInit:         options.OnInit,
+		onReadError:    options.OnReadError,
 		cache:          cache,
 	}
 	if lazyMetadata {
@@ -425,6 +428,7 @@ func (view *Dpfs) Read(name string, buff []byte, offset int64, fh uint64) int {
 		return -fuse.ENOENT
 	}
 	if err := view.ensureDirectoryLoaded(path.Dir(relative)); err != nil {
+		view.reportReadError()
 		return -fuse.EIO
 	}
 	entry, found := view.lookup(relative)
@@ -449,6 +453,7 @@ func (view *Dpfs) Read(name string, buff []byte, offset int64, fh uint64) int {
 	}
 	ranges, err := planReadRanges(view.snapshot, entry, offset, len(buff))
 	if err != nil {
+		view.reportReadError()
 		return -fuse.EIO
 	}
 	readStarted := time.Now()
@@ -474,6 +479,7 @@ func (view *Dpfs) Read(name string, buff []byte, offset int64, fh uint64) int {
 		debugLog(view.debugWriter, view.debug, "DPFS_READ_CHUNK", "path=%q chunk=%d source=%s bytes=%d elapsed=%s error=%t",
 			name, read.index, source, len(data), time.Since(chunkStarted), err != nil)
 		if err != nil || len(data) != view.snapshot.ChunkLengths[read.index] {
+			view.reportReadError()
 			if read.bufferOffset > 0 {
 				return read.bufferOffset
 			}
@@ -485,6 +491,12 @@ func (view *Dpfs) Read(name string, buff []byte, offset int64, fh uint64) int {
 	debugLog(view.debugWriter, view.debug, "DPFS_READ", "path=%q offset=%d bytes=%d chunks=%d elapsed=%s",
 		name, offset, len(buff), len(ranges), time.Since(readStarted))
 	return len(buff)
+}
+
+func (view *Dpfs) reportReadError() {
+	if view.onReadError != nil {
+		view.onReadError()
+	}
 }
 
 func (view *Dpfs) Readlink(name string) (int, string) {
