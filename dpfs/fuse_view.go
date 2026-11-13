@@ -465,8 +465,12 @@ func (view *Dpfs) Read(name string, buff []byte, offset int64, fh uint64) int {
 		data, err := view.cache.Get(key, func() ([]byte, error) {
 			cacheMiss = true
 			fetchStarted := time.Now()
-			view.mu.Lock()
-			defer view.mu.Unlock()
+			storageMu := view.storageMu
+			if storageMu == nil {
+				storageMu = &view.mu
+			}
+			storageMu.Lock()
+			defer storageMu.Unlock()
 			data, err := fetchChunk(view.config, view.storage, chunkHash)
 			debugLog(view.debugWriter, view.debug, "DPFS_CHUNK", "downloaded chunk index=%d bytes=%d elapsed=%s error=%t",
 				read.index, len(data), time.Since(fetchStarted), err != nil)

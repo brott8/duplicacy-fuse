@@ -94,6 +94,42 @@ func TestParseByteSize(t *testing.T) {
 	}
 }
 
+func TestRepeatableMountFlags(t *testing.T) {
+	var revisions intListFlag
+	var paths stringListFlag
+	flags := newFlagSet("mount", &bytes.Buffer{})
+	flags.Var(&revisions, "revision", "revision")
+	flags.Var(&paths, "path", "path")
+	if err := flags.Parse([]string{"--revision", "7", "--path", "docs/a.txt", "--revision", "9", "--path", "photos"}); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual([]int(revisions), []int{7, 9}) {
+		t.Fatalf("revisions = %v", revisions)
+	}
+	if !reflect.DeepEqual([]string(paths), []string{"docs/a.txt", "photos"}) {
+		t.Fatalf("paths = %v", paths)
+	}
+}
+
+func TestComparisonMountSelectionKeepsLegacySingleLayout(t *testing.T) {
+	if useComparisonMount(false, 1, 1) {
+		t.Fatal("a normal one-revision, one-path mount should retain its existing layout")
+	}
+	for _, test := range []struct {
+		force     bool
+		revisions int
+		paths     int
+	}{
+		{force: true, revisions: 1, paths: 1},
+		{revisions: 2, paths: 1},
+		{revisions: 1, paths: 2},
+	} {
+		if !useComparisonMount(test.force, test.revisions, test.paths) {
+			t.Errorf("useComparisonMount(%t, %d, %d) = false", test.force, test.revisions, test.paths)
+		}
+	}
+}
+
 func TestCommandHelpSucceeds(t *testing.T) {
 	var output bytes.Buffer
 	if err := run(context.Background(), []string{"revisions", "-h"}, &output, &output); err != nil {

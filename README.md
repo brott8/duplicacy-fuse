@@ -6,23 +6,32 @@
 
 This private GitHub repository continues the original implementation at [GitLab](https://gitlab.com/andrewheberle/duplicacy-fuse). The original Git commit history is preserved.
 
+## License and Acknowledgments
+
+The `duplicacy-fuse` code, including the in-tree `dpfs` module, is licensed under the MIT license in [`LICENSE`](LICENSE). The original `dpfs` implementation was also MIT-licensed. [`cgofuse`](https://github.com/winfsp/cgofuse) is MIT-licensed under its [upstream license](https://github.com/winfsp/cgofuse/blob/v1.6.0/LICENSE.txt). These terms apply to their respective code; other dependencies retain their own licenses.
+
+Duplicacy's embedded Go library and CLI are distributed under [Duplicacy's license](https://github.com/gilbertchen/duplicacy/blob/c8530c4d0fd4b607fd3e0fd98db359f6d7a15a19/LICENSE.md), not the MIT license. Its terms allow personal use and commercial trials; non-trial commercial use generally requires a per-computer CLI license, and commercial use of derivative works is subject to the same requirements. This project is intended to remain free and open source and is not offered commercially. The upstream terms may still apply to users and redistributors; consult them before any commercial use. Preserve applicable third-party license notices when redistributing builds.
+
+Thanks to [Gilbert Chen and the Duplicacy contributors](https://github.com/gilbertchen/duplicacy) for Duplicacy; [Bill Zissimopoulos and the WinFsp/cgofuse contributors](https://github.com/winfsp/cgofuse) for the Go FUSE bindings; and [Andrew Heberle](https://gitlab.com/andrewheberle/duplicacy-fuse) for the original `duplicacy-fuse` implementation and `dpfs` code.
+
 ## Requirements
 
-On Manjaro, install Go, GCC, pkgconf, and the FUSE2 development/runtime package:
+On Ubuntu, install the Go, C, pkg-config, and FUSE2 build/runtime dependencies:
 
 ```sh
-sudo pacman -S go gcc pkgconf fuse2
+sudo apt update
+sudo apt install -y golang-go build-essential pkg-config libfuse-dev fuse
 ```
 
-Mounting uses the embedded Duplicacy Go library and does not require the CLI. File history, revision listing, and directory-history revision discovery invoke the external Duplicacy CLI; install an SMB-capable version and put it on `PATH` or pass `--duplicacy-bin`. User mounts require access to `/dev/fuse` and the `fusermount` helper provided by FUSE2.
-
-Build the Linux FUSE2 binary from the repository:
+The Go modules require Go 1.26 or newer. Check `go version`; Ubuntu's `golang-go` package can be older, in which case install a current Go release from [go.dev/dl](https://go.dev/dl/) before building. Build the Linux FUSE2 binary with:
 
 ```sh
 make build-linux
 ```
 
-The build uses cgofuse v1.6.0's default FUSE2 API. FUSE3 can be selected manually with `-tags=fuse3` on systems whose FUSE3 library has the `libfuse3.so.3` soname; the current Manjaro package uses `libfuse3.so.4` and is not detected by this cgofuse version.
+The build uses cgofuse v1.6.0's default FUSE2 API. Mounting uses the embedded Duplicacy Go library and does not require the Duplicacy CLI. File history, revision listing, and directory-history revision discovery invoke the external Duplicacy CLI; install an SMB-capable version and put it on `PATH` or pass `--duplicacy-bin`. User mounts require access to `/dev/fuse` and the `fusermount` helper provided by FUSE2.
+
+The CLI manual is in [`man/duplicacy-fuse.1`](man/duplicacy-fuse.1); read it with `man ./man/duplicacy-fuse.1`. Each command also accepts `--help` for a concise flag listing.
 
 ## History
 
@@ -53,7 +62,7 @@ JSON output is suitable for shell tools or a later Nautilus context-menu caller.
 
 ## Mount
 
-Pass a positive revision and a repository-relative selected path. If `--path` names a file, the FUSE root contains only that file; if it names a directory, the mounted root is that directory and contains only its subtree. Omitting `--path` exposes the repository root. All mounts are read-only and run in the foreground by default. On Linux, `--background` starts a detached mount and returns after FUSE initialization; it prints the path to a mode-0600 log file under the system temporary directory.
+Pass a positive revision and an optional repository-relative selected path. If `--path` names a file, the FUSE root contains only that file; if it names a directory, the mounted root is that directory and contains only its subtree. Omitting `--path` exposes the repository root. Repeating `--revision` or `--path` creates a comparison mount: each revision with at least one matching selected path gets a top-level `revision-N-YYYY-MM-DD-HHMMSSZ` folder, and selected paths retain their repository-relative hierarchy inside it. Use `--compare` to force this layout for a single revision and path. A selected directory includes its subtree. Missing selected paths are omitted individually; revisions with no matching paths are omitted, and the mount fails if nothing matches. Paths are compared exactly as stored, without rename inference. All mounts are read-only and run in the foreground by default. On Linux, `--background` starts a detached mount and returns after FUSE initialization; it prints the path to a mode-0600 log file under the system temporary directory.
 
 For current-format snapshots mounted at the repository root, directory entries are streamed and cached when a directory is first listed, rather than building the full file tree at mount startup. Explicit `--path` views still load metadata up front. Legacy JSON-format snapshots must be sorted by Duplicacy before listing, so their first directory browse still loads all metadata. The snapshot format has no random-access index, so first access to a deep directory may scan preceding metadata entries.
 
@@ -67,6 +76,19 @@ For current-format snapshots mounted at the repository root, directory entries a
   --mountpoint /mnt/duplicacy-history \
   --cache-size 10GiB
 ```
+
+Compare selected paths across revisions:
+
+```sh
+./duplicacy-fuse mount --compare \
+  --repo /path/to/repo \
+  --storage nas \
+  --revision 41 --revision 42 \
+  --path 'src/main.go' --path 'docs' \
+  --mountpoint /mnt/duplicacy-comparison
+```
+
+Comparison setup loads metadata for each requested revision, so startup time and metadata memory use grow with the number and size of selected revisions. File chunks remain lazy and are fetched only when read.
 
 Use `--debug` on `mount` to log setup timings, entries scanned per directory, and chunk read/cache timing. Duplicacy INFO/TRACE logs are suppressed in debug, background, and desktop-helper modes to avoid exposing key material; warnings and errors remain visible. Debug output may contain repository paths and directory names, so review it before sharing.
 
@@ -86,7 +108,7 @@ FUSE chunk reads support Duplicacy's password-based storage encryption. RSA-encr
 
 ## GNOME Companion
 
-The GNOME desktop client is maintained as a separate companion project. It uses only the optional `gui-storages`, `gui-snapshots`, `gui-revisions`, and `--gui-control-fd` helper interfaces; this CLI remains independently buildable and does not depend on GTK or libadwaita. GUI-managed encrypted operations ignore saved/environment storage-encryption passwords and request a fresh password over a private inherited Unix socket. The desktop app never sends that password in command-line arguments or environment variables. Snapshot IDs and revisions are listed through the embedded library and do not require the external Duplicacy CLI.
+The GNOME desktop client is maintained as a separate companion project. It uses the optional `gui-storages`, `gui-snapshots`, `gui-revisions`, `gui-browse`, and `--gui-control-fd` helper interfaces; this CLI remains independently buildable and does not depend on GTK or libadwaita. Comparison profiles choose a reference revision to browse and one or more comparison revisions; selected repository-relative paths are applied exactly to each comparison revision. GUI-managed encrypted operations ignore saved/environment storage-encryption passwords and request a fresh password over a private inherited Unix socket. The desktop app never sends that password in command-line arguments or environment variables. Snapshot IDs, revisions, and browsed directory entries are read through the embedded library and do not require the external Duplicacy CLI.
 
 ## Chunk Cache
 
@@ -100,7 +122,7 @@ Clear the default chunk cache with:
 
 For a custom cache location, pass the same directory with `--cache-dir`. The command only clears directories marked as a `duplicacy-fuse` cache.
 
-Revision manifests and chunk indexes are metadata and are loaded once per mount. File data is not prefetched or staged; each read fetches only chunks intersecting its requested byte range. Selected historical views do not support writes, restores, rename inference, or full-repository browsing across revisions.
+Revision manifests and chunk indexes are metadata and are loaded once per mount. File data is not prefetched or staged; each read fetches only chunks intersecting its requested byte range. Historical views do not support writes, restores, or rename inference. Comparison mounts expose only selected exact paths (or the whole revision when no path is selected).
 
 ## Testing
 

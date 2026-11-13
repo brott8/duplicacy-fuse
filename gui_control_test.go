@@ -111,6 +111,35 @@ func TestGUISnapshotIDPayloadRemainsJSON(t *testing.T) {
 	}
 }
 
+func TestGUIDirectoryPayloadRemainsJSON(t *testing.T) {
+	message, err := json.Marshal(guiIPCMessage{
+		Type:    "directory-ready",
+		Entries: json.RawMessage(`[{"name":"docs","path":"docs","type":"directory"},{"name":"a.txt","path":"docs/a.txt","type":"file","size":12}]`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Type    string          `json:"type"`
+		Entries json.RawMessage `json:"entries"`
+	}
+	if err := json.Unmarshal(message, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	var entries []struct {
+		Name string `json:"name"`
+		Path string `json:"path"`
+		Type string `json:"type"`
+		Size int64  `json:"size"`
+	}
+	if decoded.Type != "directory-ready" || json.Unmarshal(decoded.Entries, &entries) != nil {
+		t.Fatalf("invalid directory IPC message: %s", message)
+	}
+	if len(entries) != 2 || entries[0].Path != "docs" || entries[0].Type != "directory" || entries[1].Size != 12 {
+		t.Fatalf("decoded entries = %#v", entries)
+	}
+}
+
 func TestValidateGUIMountpoint(t *testing.T) {
 	mountpoint := t.TempDir()
 	if err := validateGUIMountpoint(mountpoint); err != nil {

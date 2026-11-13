@@ -1,0 +1,266 @@
+.TH DUPLICACY-FUSE 1 "November 2026" "duplicacy-fuse" "User Commands"
+.SH NAME
+duplicacy-fuse \- browse Duplicacy snapshot revisions through a read-only FUSE mount
+.SH SYNOPSIS
+.B duplicacy-fuse
+.I command
+.RI [ options ]
+.P
+.B duplicacy-fuse mount
+.BR --repo " " DIR
+.BR --revision " " NUMBER
+.RI [ --revision " " NUMBER ... ]
+.BR --mountpoint " " DIR
+.RI [ options ]
+.P
+.B duplicacy-fuse history
+.BR --repo " " DIR
+.BR --path " " PATH
+.RI [ options ]
+.P
+.B duplicacy-fuse revisions
+.BR --repo " " DIR
+.RI [ options ]
+.P
+.B duplicacy-fuse clear-cache
+.RI [ options ]
+.SH DESCRIPTION
+.B duplicacy-fuse
+mounts selected Duplicacy snapshot revisions as a read-only filesystem and
+provides commands for listing snapshot revisions and file or directory history.
+Mounting reads snapshots through the embedded Duplicacy Go library. History and
+revision commands use the external Duplicacy command-line client.
+.P
+Run a command with
+.B --help
+to print its available flags. Flags use the Go command-line parser syntax; a
+flag value may be supplied after the flag or after an equals sign.
+.SH COMMANDS
+.TP
+.B mount
+Mount one snapshot revision or compare multiple revisions. The mount runs in the foreground by default.
+.TP
+.B history
+List the revisions containing a file, or use
+.B --directory
+to check the history of an exact directory path.
+.TP
+.B revisions
+List the available revisions for the selected snapshot.
+.TP
+.B clear-cache
+Remove the Duplicacy FUSE chunk cache.
+.TP
+.B gui-storages, gui-snapshots, gui-revisions, gui-browse
+Private JSON and IPC helpers for the companion desktop application. These
+interfaces are not intended for direct interactive use.
+.SH COMMON OPTIONS
+The following options are available for
+.BR mount ,
+.BR history ,
+and
+.BR revisions .
+.TP
+.BI --repo " DIR"
+Repository directory. Required.
+.TP
+.BI --storage " NAME"
+Configured storage name. If exactly one storage is configured, it is selected
+automatically; otherwise this option is required.
+.TP
+.BI --snapshot " ID"
+Snapshot ID to select. Defaults to the snapshot ID configured for the selected
+storage.
+.TP
+.BI --password " PASSWORD"
+Storage-encryption password. Prefer Duplicacy's password environment variable
+instead of putting a password in process arguments. This is not the SMB login
+password.
+.SH MOUNT OPTIONS
+.TP
+.BI --path " PATH"
+Repository-relative file or directory to expose at the mount root. If omitted,
+the repository root is exposed. Repeat this option to select multiple paths;
+it is repeatable for comparison mounts.
+.TP
+.B --compare
+Force the revision-folder comparison layout, including when only one revision
+and one path are selected. This is used by comparison profiles in the GNOME
+companion; ordinary one-revision mounts retain their existing layout.
+.TP
+.BI --revision " NUMBER"
+Positive snapshot revision to mount. Required and repeatable. When multiple
+revisions or paths are supplied, each revision with at least one matching path
+is exposed beneath a top-level folder named with its revision and UTC timestamp.
+Selected paths retain their repository-relative hierarchy; selected directories
+include their subtrees. Paths are matched exactly without rename inference.
+Missing selected paths are omitted, and setup fails if no selected path exists
+in any requested revision. Metadata for each requested revision is loaded during
+setup, so startup time and metadata memory use grow with the number and size of
+selected revisions.
+.TP
+.BI --mountpoint " DIR"
+FUSE mountpoint directory. Required.
+.TP
+.BI --cache-dir " DIR"
+Persistent chunk cache directory. Defaults to
+.IR ${XDG_CACHE_HOME:-$HOME/.cache}/duplicacy-fuse/chunks .
+Choose a location outside both the repository and backup storage.
+.TP
+.BI --cache-size " SIZE"
+Maximum persistent chunk cache payload size. Defaults to
+.BR 10GiB .
+Accepts a non-negative byte count with an optional
+.BR B ,
+.BR KB ,
+.BR MB ,
+.BR GB ,
+.BR KiB ,
+.BR MiB ,
+or
+.B GiB
+suffix. Decimal suffixes use powers of 1000 and binary suffixes use powers of
+1024. A value of zero disables persistent chunk-payload caching.
+.TP
+.B --debug
+Log mount timings, directory scans, chunk reads, and cache activity. Debug
+output can include repository paths and directory names.
+.TP
+.B --background
+On Linux, start a detached mount and return once FUSE initialization completes.
+The mount process writes its log to a mode-0600 file under the system temporary
+directory.
+.TP
+.BI --gui-control-fd " FD"
+Private socket descriptor used by the companion desktop application. Do not
+invoke this option manually.
+.SH HISTORY OPTIONS
+.TP
+.BI --path " PATH"
+Repository-relative file or directory whose history is requested. Required.
+Absolute paths and paths escaping the repository are rejected.
+.TP
+.B --directory
+Report the revisions where the exact directory exists. Without this option,
+history is for a file and the repository root cannot be selected.
+.TP
+.B --json
+Write machine-readable JSON instead of the default tabular or Duplicacy output.
+.TP
+.BI --duplicacy-bin " PATH"
+External Duplicacy CLI executable. Defaults to
+.BR duplicacy .
+.SH REVISIONS OPTIONS
+.TP
+.B --json
+Write machine-readable JSON instead of tab-separated revision and timestamp
+lines.
+.TP
+.BI --duplicacy-bin " PATH"
+External Duplicacy CLI executable. Defaults to
+.BR duplicacy .
+.SH CLEAR-CACHE OPTIONS
+.TP
+.BI --cache-dir " DIR"
+Chunk cache directory to clear. Defaults to the standard user cache directory.
+Only directories marked as a
+.B duplicacy-fuse
+cache are cleared.
+.SH DESKTOP HELPER OPTIONS
+The
+.B gui-storages
+helper accepts
+.BR --repo .
+The
+.B gui-snapshots
+helper accepts
+.B --repo
+and
+.BR --storage .
+It accepts but ignores
+.BR --snapshot ,
+and rejects
+.BR --password .
+The
+.B gui-revisions
+helper accepts the repository selection options documented above, except that
+it rejects
+.BR --password .
+.P
+The
+.B gui-browse
+helper accepts the repository selection options, a positive
+.BR --revision ,
+and an optional repository-relative
+.BR --path .
+It returns immediate directory entries as JSON over the private helper socket
+and rejects
+.BR --password .
+All helpers requiring storage access use the private
+.BI --gui-control-fd " FD"
+socket descriptor supplied by the desktop application. Do not invoke this
+option manually.
+.SH ENVIRONMENT
+.TP
+.B DUPLICACY_PASSWORD
+Storage-encryption password for the default Duplicacy storage. For a named
+storage, Duplicacy uses
+.B DUPLICACY_<STORAGE_NAME>_PASSWORD
+with the storage name uppercased and non-alphanumeric characters replaced by
+underscores. Duplicacy's own configuration and password behavior apply to
+external CLI commands.
+.TP
+.B XDG_CACHE_HOME
+Base directory used for the default chunk cache when set.
+.SH NOTES
+All mounts are read-only. The mount process requires access to
+.B /dev/fuse
+and the FUSE2
+.B fusermount
+helper. The CLI-backed commands require a Duplicacy CLI on
+.BR PATH ,
+or its path can be supplied with
+.BR --duplicacy-bin .
+.P
+The cache stores downloaded chunk payloads as plaintext. Protect custom cache
+locations accordingly. File history, revision listing, and directory-history
+revision discovery run the external Duplicacy CLI with the selected repository
+as its working directory.
+.SH EXAMPLES
+Mount revision 42 at a local mountpoint:
+.P
+.RS
+.nf
+duplicacy-fuse mount --repo /backup/repo --revision 42 \\
+  --mountpoint /mnt/duplicacy-history
+.fi
+.RE
+.P
+Show JSON history for a file:
+.P
+.RS
+.nf
+duplicacy-fuse history --repo /backup/repo --path src/main.go --json
+.fi
+.RE
+.P
+List revisions for a named storage:
+.P
+.RS
+.nf
+duplicacy-fuse revisions --repo /backup/repo --storage nas
+.fi
+.RE
+.P
+Compare files and a directory across two revisions:
+.P
+.RS
+.nf
+duplicacy-fuse mount --repo /backup/repo --storage nas \
+  --revision 41 --revision 42 --path src/main.go --path docs \
+  --mountpoint /mnt/duplicacy-comparison
+.fi
+.RE
+.SH SEE ALSO
+.BR fusermount (1),
+.BR duplicacy (1)

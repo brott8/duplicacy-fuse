@@ -24,6 +24,7 @@ type guiIPCMessage struct {
 	Value       string          `json:"value,omitempty"`
 	Revisions   json.RawMessage `json:"revisions,omitempty"`
 	SnapshotIDs json.RawMessage `json:"snapshot_ids,omitempty"`
+	Entries     json.RawMessage `json:"entries,omitempty"`
 }
 
 type guiMountControl struct {

@@ -16,6 +16,7 @@ type Dpfs struct {
 	preference          *duplicacy.Preference
 	repository          string
 	mu                  sync.Mutex
+	storageMu           *sync.Mutex
 	metadataMu          sync.RWMutex
 	entries             map[string]*duplicacy.Entry
 	children            map[string][]string
