@@ -7,3 +7,7 @@ duplicacy_fuse_*
 
 # Ignore browser automation artifacts
 .playwright-mcp/
+
+# Ignore editor and project configuration
+.kilo/
+.vscode/
