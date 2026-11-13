@@ -8,6 +8,8 @@ This private GitHub repository continues the original implementation at [GitLab]
 
 ## License and Acknowledgments
 
+This project was built with AI assistance. I understand and have reviewed the code.
+
 The `duplicacy-fuse` code, including the in-tree `dpfs` module, is licensed under the MIT license in [`LICENSE`](LICENSE). The original `dpfs` implementation was also MIT-licensed. [`cgofuse`](https://github.com/winfsp/cgofuse) is MIT-licensed under its [upstream license](https://github.com/winfsp/cgofuse/blob/v1.6.0/LICENSE.txt). These terms apply to their respective code; other dependencies retain their own licenses.
 
 Duplicacy's embedded Go library and CLI are distributed under [Duplicacy's license](https://github.com/gilbertchen/duplicacy/blob/c8530c4d0fd4b607fd3e0fd98db359f6d7a15a19/LICENSE.md), not the MIT license. Its terms allow personal use and commercial trials; non-trial commercial use generally requires a per-computer CLI license, and commercial use of derivative works is subject to the same requirements. This project is intended to remain free and open source and is not offered commercially. The upstream terms may still apply to users and redistributors; consult them before any commercial use. Preserve applicable third-party license notices when redistributing builds.
@@ -108,7 +110,7 @@ FUSE chunk reads support Duplicacy's password-based storage encryption. RSA-encr
 
 ## GNOME Companion
 
-The GNOME desktop client is maintained as a separate companion project. It uses the optional `gui-storages`, `gui-snapshots`, `gui-revisions`, `gui-browse`, and `--gui-control-fd` helper interfaces; this CLI remains independently buildable and does not depend on GTK or libadwaita. Comparison profiles choose a reference revision to browse and one or more comparison revisions; selected repository-relative paths are applied exactly to each comparison revision. GUI-managed encrypted operations ignore saved/environment storage-encryption passwords and request a fresh password over a private inherited Unix socket. The desktop app never sends that password in command-line arguments or environment variables. Snapshot IDs, revisions, and browsed directory entries are read through the embedded library and do not require the external Duplicacy CLI.
+The GNOME desktop client is maintained as a separate [companion project](https://github.com/brott8/duplicacy-fuse-gnome). It uses the optional `gui-storages`, `gui-snapshots`, `gui-revisions`, `gui-browse`, and `--gui-control-fd` helper interfaces; this CLI remains independently buildable and does not depend on GTK or libadwaita. Comparison profiles choose a reference revision to browse and one or more comparison revisions; selected repository-relative paths are applied exactly to each comparison revision. GUI-managed encrypted operations ignore saved/environment storage-encryption passwords and request a fresh password over a private inherited Unix socket. The desktop app never sends that password in command-line arguments or environment variables. Snapshot IDs, revisions, and browsed directory entries are read through the embedded library and do not require the external Duplicacy CLI.
 
 ## Chunk Cache
 
