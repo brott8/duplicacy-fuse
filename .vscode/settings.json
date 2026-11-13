@@ -1,8 +1,0 @@
-{
-    "go.toolsEnvVars": {
-        "CGO_ENABLED": "0"
-    },
-    "terminal.integrated.env.windows": {
-        "CGO_ENABLED": "0"
-    }
-}
